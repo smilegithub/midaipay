@@ -1,0 +1,11 @@
+package com.fncat.xswipe.controller;
+
+/**
+ * 分发回调
+ * 
+ * @author Fncat
+ * @data 2014-4-2下午5:40:24
+ */
+public interface Event {
+	public void setEvent(int what, Object obj);
+}

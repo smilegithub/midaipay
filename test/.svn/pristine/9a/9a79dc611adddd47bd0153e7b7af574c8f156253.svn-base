@@ -1,0 +1,813 @@
+package com.fncat.xswipe;
+
+import java.io.BufferedReader;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+
+import org.apache.http.util.EncodingUtils;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Message;
+import android.text.Html;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.View.OnTouchListener;
+import android.widget.AdapterView;
+import android.widget.AdapterView.OnItemSelectedListener;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
+import cn.com.fmsh.util.FM_Bytes;
+
+import com.fncat.xswipe.a_thread.Balance;
+import com.fncat.xswipe.a_thread.Common;
+import com.fncat.xswipe.a_thread.Dever;
+import com.fncat.xswipe.a_thread.GetICData;
+import com.fncat.xswipe.a_thread.Http;
+import com.fncat.xswipe.a_thread.IC;
+import com.fncat.xswipe.a_thread.ICData;
+import com.fncat.xswipe.a_thread.ICReset;
+import com.fncat.xswipe.a_thread.MAC;
+import com.fncat.xswipe.a_thread.MoneyScript;
+import com.fncat.xswipe.a_thread.Password;
+import com.fncat.xswipe.a_thread.Sw;
+import com.fncat.xswipe.a_thread.UpModel;
+import com.fncat.xswipe.a_thread.UpdateKey;
+import com.fncat.xswipe.a_thread.Writekey;
+import com.fncat.xswipe.controller.ErrorCode;
+import com.fncat.xswipe.controller.POSManage;
+import com.fncat.xswipe.controller.StatusListener;
+import com.fncat.xswipe.utils.Lw;
+import com.fncat.xswipe.utils.Utils;
+
+public class MainActivity extends Activity implements OnItemSelectedListener, OnTouchListener,
+		OnClickListener {
+
+	private static final String TAG = "UN_Demo";
+
+	private TextView bal_init, ic_init, query_count, init_SDK, SDK_version, Detection_time,
+			new_Adc, DevType, devId, DevVersion, DeviceInfo_time, Sign_time, Swiper_time,
+			passwd_time, abstract_time, query_time, gain_data, ic_time, bal_time, DevVersion_time;
+	private TextView common_data, common_data_time, data, data_time, ic_reset, ic_reset_time,
+			dev_Ver, dev_Ver_time;
+	private TextView up_model, up_time, money_script_data, money_script_time;
+	private TextView writekey_data, writekey_time, update_data, update_time, password_data,
+			password_time, mac_data, mac_time;
+	private EditText password_edit, common_edit, ic_num, passwd, edit, money_script_edit;// 银行卡号
+	private Button query_btn;
+	private Spinner sps;
+	// 弹出框
+	public static LinearLayout dialog_data_load;
+	public static TextView dialog_data_load_txt;
+
+	private String[] bankIcCard55Data = new String[1];
+	private String[] bankIcCardNo55Data = new String[1];
+
+	/* 设备信息 */
+	public static int[] Adc = new int[2];
+	public static String[] DevTypes = new String[1];
+	public static byte[] deviceId = new byte[8];
+	public static byte[] version = new byte[9];
+	public static byte[] checkCode = new byte[16];
+	public static byte[] encryptFactor = new byte[8];// 存储服务器下发的分散因子
+	public static String[] recvbuf = new String[1];// IC卡
+	public static byte[] moneys = new byte[6];// 余额
+	public static String[] script = new String[1];
+	public static String[] PIN_Block = new String[1];
+	public static String[] MAC = new String[1];
+	/* 卡号，卡磁 */
+	private byte[] encTrack;
+	private boolean bEncTrack;
+	private int mSel = 0;
+	private String[] mPat = new String[] { "生产环境", "UAT环境", "SIT1环境", "SIT2环境", "李弦桉要求的ip" };
+	private String[] mURL = new String[] { "http://user.icardpay.com/hk-frt-sys-web/",
+			"http://59.151.121.232/hk-frt-sys-web/", "http://192.168.0.127/hk-frt-sys-web/",
+			"http://192.168.0.145/hk-frt-sys-web/", "http://192.168.0.148/hk-frt-sys-web/" };
+
+	private int num;
+	private POSManage pm;
+	private long common_btnn, exitTime;
+
+	private TextView mSwipeCardStateTv;
+	private TextView mSwipeCardDeviceInfoTv;
+	private TextView mIcCheckInfoTv;
+
+	// IC卡复位返回数据
+	private String[] resetData = new String[1];
+
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_main);
+
+		mSwipeCardStateTv = (TextView) findViewById(R.id.tv_swipecard_state);
+		mSwipeCardDeviceInfoTv = (TextView) findViewById(R.id.tv_swipecard_deviceInfo);
+		mSwipeCardStateTv.setTextColor(Color.RED);
+		mSwipeCardStateTv.setText("断开");
+
+		query_btn = (Button) findViewById(R.id.query_btn);
+
+		common_data = (TextView) findViewById(R.id.common_data);
+		common_data_time = (TextView) findViewById(R.id.common_data_time);
+		common_edit = (EditText) findViewById(R.id.common_edit);
+
+		up_model = (TextView) findViewById(R.id.up_model);
+		up_time = (TextView) findViewById(R.id.up_time);
+
+		data = (TextView) findViewById(R.id.data);
+		data_time = (TextView) findViewById(R.id.data_time);
+		edit = (EditText) findViewById(R.id.edit);
+		update_data = (TextView) findViewById(R.id.update_data);
+		update_time = (TextView) findViewById(R.id.update_time);
+		password_edit = (EditText) findViewById(R.id.password_edit);
+
+		money_script_edit = (EditText) findViewById(R.id.money_script_edit);
+		money_script_data = (TextView) findViewById(R.id.money_script_data);
+		money_script_time = (TextView) findViewById(R.id.money_script_time);
+		password_data = (TextView) findViewById(R.id.password_data);
+		password_time = (TextView) findViewById(R.id.password_time);
+		mac_data = (TextView) findViewById(R.id.mac_data);
+		mac_time = (TextView) findViewById(R.id.mac_time);
+		writekey_data = (TextView) findViewById(R.id.writekey_data);
+		writekey_time = (TextView) findViewById(R.id.writekey_time);
+
+		ic_reset = (TextView) findViewById(R.id.ic_reset);
+		ic_reset_time = (TextView) findViewById(R.id.ic_reset_time);
+
+		dev_Ver = (TextView) findViewById(R.id.dev_Ver);
+		dev_Ver_time = (TextView) findViewById(R.id.dev_Ver_time);
+
+		bal_init = (TextView) findViewById(R.id.bal_init);
+		bal_time = (TextView) findViewById(R.id.bal_time);
+
+		ic_init = (TextView) findViewById(R.id.ic_init);
+		ic_time = (TextView) findViewById(R.id.ic_time);
+
+		ic_num = (EditText) findViewById(R.id.ic_num);
+		passwd = (EditText) findViewById(R.id.passwd);
+		query_count = (TextView) findViewById(R.id.query_count);
+		init_SDK = (TextView) findViewById(R.id.init_SDK);
+		SDK_version = (TextView) findViewById(R.id.SDK_version);
+		Detection_time = (TextView) findViewById(R.id.Detection_time);
+		DevVersion = (TextView) findViewById(R.id.DevVersion);
+		DevVersion_time = (TextView) findViewById(R.id.DevVersion_time);
+		new_Adc = (TextView) findViewById(R.id.new_Adc);
+		DevType = (TextView) findViewById(R.id.DevType);
+		devId = (TextView) findViewById(R.id.devId);
+		DeviceInfo_time = (TextView) findViewById(R.id.DeviceInfo_time);
+		Sign_time = (TextView) findViewById(R.id.Sign_time);
+		Swiper_time = (TextView) findViewById(R.id.Swiper_time);
+		passwd_time = (TextView) findViewById(R.id.passwd_time);
+		abstract_time = (TextView) findViewById(R.id.abstract_time);
+		query_time = (TextView) findViewById(R.id.query_time);
+		gain_data = (TextView) findViewById(R.id.gain_data);
+
+		dialog_data_load = (LinearLayout) findViewById(R.id.dialog_data_load);
+		dialog_data_load_txt = (TextView) findViewById(R.id.dialog_data_load_txt);
+
+		mIcCheckInfoTv = (TextView) findViewById(R.id.tv_ic_check);
+		sps = (Spinner) findViewById(R.id.sps);
+		ArrayAdapter<String> mArrayAdapter = new ArrayAdapter<String>(this, R.layout.myspinner,
+				mPat);
+		sps.setAdapter(mArrayAdapter);
+		sps.setOnItemSelectedListener(this);
+
+		dialog_data_load.setOnTouchListener(this);
+
+		((Button) findViewById(R.id.money_script_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.common_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.up_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.data_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.ic_reset_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.ic_exist_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.dev_Ver_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.bal_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.ic_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.log_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.detect_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.init_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.sw_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.query_btn)).setOnClickListener(this);
+
+		((Button) findViewById(R.id.writekey_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.update_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.password_btn)).setOnClickListener(this);
+		((Button) findViewById(R.id.mac_btn)).setOnClickListener(this);
+
+		num = 0;
+		query_count.setText(num + "");
+
+		long SDK_times = System.nanoTime();
+		ErrorHint.InitErrorMsg();
+		pm = POSManage.getInstance();
+		pm.setDebugMode(true);
+		pm.setListener(this, mStatusListener);
+		init_SDK.setText((System.nanoTime() - SDK_times) / 1000000 + "毫秒");// 初始化SDK耗时
+		Lw.WriteLog(this, "初始化SDK，监听设备状态耗时：" + init_SDK.getText().toString().trim());
+		SDK_version.setText(pm.getSDKVersion());// SDK版本显示
+	}
+
+	@Override
+	public void onClick(View v) {
+		if ((System.nanoTime() - common_btnn) / 1000000 < 500) {
+			Toast.makeText(this, "点击间隔时间过短！", Toast.LENGTH_SHORT).show();
+			return;
+		}
+		common_btnn = System.nanoTime();
+		boolean isShow = false;
+		boolean isQuery = false;
+		switch (v.getId()) {
+		case R.id.money_script_btn:// 金融IC卡脚本
+			dialog_data_load_txt.setText("金融IC卡脚本。。。");
+			new MoneyScript(mHandler, pm, money_script_edit.getText().toString().trim()).start();
+			money_script_data.setText("");
+			money_script_time.setText("");
+			isShow = true;
+			break;
+		case R.id.common_btn:// 命令下发
+			dialog_data_load_txt.setText("命令发送，请稍等！");
+			new Common(mHandler, pm, common_edit.getText().toString().trim()).start();
+			common_data.setText("");
+			common_data_time.setText("");
+			isShow = true;
+			break;
+		case R.id.writekey_btn:// 写入密钥20
+			dialog_data_load_txt.setText("写入密钥20，请稍等！");
+			// String writekey20 = ReadSDData("writekey20.txt");
+			String writekey20 = "E000000000000001 10000600 CEB97B05644F19FBB40BA6AEE1757552 08000400 7CF0B271605743F3";
+			if (writekey20 == null) {
+				Toast.makeText(this, "写入密钥20,没有数据！", Toast.LENGTH_SHORT).show();
+			} else {
+				new Writekey(mHandler, pm, writekey20).start();
+				writekey_data.setText("");
+				writekey_time.setText("");
+				isShow = true;
+			}
+			break;
+		case R.id.update_btn:// 更新密钥
+			dialog_data_load_txt.setText("更新密钥指令，请稍等！");
+			String updatekey = ReadSDData("updatekey.txt");
+			if (updatekey == null) {
+				Toast.makeText(this, "更新密钥,没有数据！", Toast.LENGTH_SHORT).show();
+			} else {
+				new UpdateKey(mHandler, pm, updatekey).start();
+				update_data.setText("");
+				update_time.setText("");
+				isShow = true;
+			}
+			break;
+		case R.id.password_btn:// 获取用户密码
+			dialog_data_load_txt.setText("获取用户密码，请稍等！");
+			String passwordedit = password_edit.getText().toString().trim();
+			if (passwordedit.length() == 0) {
+				passwordedit = "6348924883AB8CA64B4C29F8ECB13B3E";
+			}
+			new Password(mHandler, pm, passwordedit).start();
+			password_data.setText("");
+			password_time.setText("");
+			isShow = true;
+			break;
+		case R.id.mac_btn:// 获取MAC
+			dialog_data_load_txt.setText("获取MAC，请稍等！");
+			String mac = ReadSDData("mac.txt");
+			if (mac == null) {
+				Toast.makeText(this, "获取MAC,没有数据！", Toast.LENGTH_SHORT).show();
+			} else {
+				new MAC(mHandler, pm, mac).start();
+				mac_data.setText("");
+				mac_time.setText("");
+				isShow = true;
+			}
+			break;
+		case R.id.up_btn:// 切换至升级模式
+			dialog_data_load_txt.setText("切换至升级模式");
+			new UpModel(mHandler, pm).start();
+			up_model.setText("");
+			up_time.setText("");
+			isShow = true;
+			break;
+		case R.id.data_btn:// IC卡数据传输
+			dialog_data_load_txt.setText("IC卡数据传输");
+			new ICData(mHandler, pm, edit.getText().toString().trim()).start();
+			data.setText("");
+			data_time.setText("");
+			isShow = true;
+			break;
+		case R.id.ic_reset_btn:// IC卡复位
+			dialog_data_load_txt.setText("IC卡复位，请稍等！");
+			new ICReset(mHandler, pm, resetData).start();
+			ic_reset.setText("");
+			ic_reset_time.setText("");
+			isShow = true;
+			break;
+		case R.id.ic_exist_btn:// 检测是否有IC卡
+			dialog_data_load_txt.setText("检测IC卡中，请稍等！");
+			new IcCheckThread().start();
+			isShow = true;
+			break;
+		case R.id.dev_Ver_btn:// 获取设备ID
+			dialog_data_load_txt.setText("获取设备ID，请稍等！");
+			new Dever(mHandler, pm).start();
+			dev_Ver.setText("");
+			dev_Ver_time.setText("");
+			isShow = true;
+			break;
+		case R.id.bal_btn:// 获取电子现金余额
+			dialog_data_load_txt.setText("获取电子现金余额，请稍等！");
+			new Balance(mHandler, pm).start();
+			bal_init.setText("");
+			bal_time.setText("");
+			isShow = true;
+			break;
+		case R.id.ic_btn:// 电卡购电
+			dialog_data_load_txt.setText("电卡购电，请稍等！");
+			new IC(mHandler, pm).start();
+			ic_init.setText("");
+			ic_time.setText("");
+			isShow = true;
+			break;
+		case R.id.log_btn:// 查看日志
+			Toast.makeText(this, "正在加载日志！", Toast.LENGTH_SHORT).show();
+			Intent mIntent = new Intent(this, LogActivity.class);
+			startActivity(mIntent);
+			break;
+		case R.id.detect_btn:// 设备检测
+			dialog_data_load_txt.setText("设备检测，请稍等！");
+			// new Sw(mHandler, pm, mURL[mSel] + "F10017.front",
+			// dialog_data_load, 1).start();
+			new Sw(mHandler, pm, mURL[mSel] + "F10017.front", dialog_data_load, 999).start();
+			isQuery = true;
+			isShow = true;
+			break;
+		case R.id.init_btn:// 余额查询
+			dialog_data_load_txt.setText("余额查询，请稍等！");
+			new Sw(mHandler, pm, mURL[mSel] + "F10017.front", dialog_data_load, 2).start();
+			isQuery = true;
+			isShow = true;
+			break;
+		case R.id.sw_btn:// 刷卡测试
+			dialog_data_load_txt.setText("刷卡测试，请稍等！");
+			new Sw(mHandler, pm, mURL[mSel] + "F10017.front", dialog_data_load, 3).start();
+			isQuery = true;
+			isShow = true;
+			break;
+		case R.id.query_btn:// 确定
+			dialog_data_load_txt.setText("加密联网获取余额，请稍等！");
+			if (ic_num.getText().toString().length() <= 0) {
+				Toast.makeText(this, "请刷卡。。。", Toast.LENGTH_SHORT).show();
+				break;
+			}
+			if (passwd.getText().toString().length() != 6) {
+				Toast.makeText(this, "请输入密码。。。", Toast.LENGTH_SHORT).show();
+				break;
+			}
+			if (!bEncTrack) {
+				Toast.makeText(this, "未获取到卡磁", Toast.LENGTH_SHORT).show();
+				break;
+			}
+			new Http(mHandler, pm, mURL[mSel] + "F10020.front", dialog_data_load, encTrack, passwd
+					.getText().toString().trim()).start();
+			gain_data.setText("");
+			query_btn.setEnabled(false);
+			isShow = true;
+			break;
+		}
+		if (isQuery) {
+			ic_num.setText("");
+			passwd.setText("");
+			DevVersion.setText("");
+			DevVersion_time.setText("");
+			new_Adc.setText("");
+			DevType.setText("");
+			devId.setText("");
+			DeviceInfo_time.setText("");
+			Sign_time.setText("");
+			Swiper_time.setText("");
+			passwd_time.setText("");
+			abstract_time.setText("");
+			query_time.setText("");
+			gain_data.setText("");
+			query_btn.setEnabled(false);
+		}
+		if (isShow && dialog_data_load.getVisibility() != View.VISIBLE)
+			dialog_data_load.setVisibility(View.VISIBLE);
+	}
+
+	private class IcCheckThread extends Thread {
+		@Override
+		public void run() {
+			int result = pm.SCardGetStatus();
+			Message msg = Message.obtain(mHandler, 0xB1E4, result);
+			msg.sendToTarget();
+		}
+	}
+
+	private StatusListener mStatusListener = new StatusListener() {
+		@Override
+		public void onPlugin() {
+			mSwipeCardStateTv.setTextColor(Color.GREEN);
+			mSwipeCardStateTv.setText("连接");
+			// Toast.makeText(MainActivity.this, "检测到刷卡器",
+			// Toast.LENGTH_SHORT).show();
+		}
+
+		@Override
+		public void onPlugout() {
+			mSwipeCardStateTv.setTextColor(Color.RED);
+			mSwipeCardStateTv.setText("断开");
+			mSwipeCardDeviceInfoTv.setVisibility(View.INVISIBLE);
+			// Toast.makeText(MainActivity.this, "刷卡器拔出..",
+			// Toast.LENGTH_SHORT).show();
+			if (MainActivity.dialog_data_load.getVisibility() != View.GONE)
+				MainActivity.dialog_data_load.setVisibility(View.GONE);
+		}
+
+		@Override
+		public void onError(int errCode) {
+			if (errCode == ErrorCode.Device_Card_NULL || errCode == ErrorCode.SYSTEM_BUSY
+					|| errCode == ErrorCode.Device_encrypt_NULL
+					|| errCode == ErrorCode.Device_encrypt_1) {
+				if (MainActivity.dialog_data_load.getVisibility() != View.GONE)
+					MainActivity.dialog_data_load.setVisibility(View.GONE);
+			}
+			Toast.makeText(MainActivity.this, ErrorHint.errorMap.get(errCode), Toast.LENGTH_SHORT)
+					.show();
+		}
+
+		@Override
+		public void onCardNum(String accNo) {
+			ic_num.setText(accNo);
+			query_btn.setEnabled(true);
+			if (MainActivity.dialog_data_load.getVisibility() != View.GONE)
+				MainActivity.dialog_data_load.setVisibility(View.GONE);
+		}
+
+		@Override
+		public void onCardData(byte[] encTrack) {
+			if (encTrack != null) {
+				MainActivity.this.encTrack = encTrack;
+				Toast.makeText(MainActivity.this, "磁条卡磁~" + FM_Bytes.bytesToHexString(encTrack),
+						Toast.LENGTH_SHORT).show();
+				bEncTrack = true;
+			}
+		}
+
+		@Override
+		public void onCardInfo(String accNo, byte[] encTrack) {
+			// DO NOTHING
+		}
+
+		@Override
+		public void onDetectICCard() {
+			Log.d(TAG, "onDetectICCard");
+		}
+
+		@Override
+		public void onICCard(String accNo) {
+			ic_num.setText(accNo);
+			query_btn.setEnabled(true);
+			if (MainActivity.dialog_data_load.getVisibility() != View.GONE)
+				MainActivity.dialog_data_load.setVisibility(View.GONE);
+
+			// getNo55Data,get55Data
+			dialog_data_load_txt.setText("正在获取IC卡数据，请稍等！");
+			new GetICData(mHandler, pm, bankIcCard55Data, bankIcCardNo55Data).start();
+
+			passwd.setText("");
+			DevVersion.setText("");
+			DevVersion_time.setText("");
+			new_Adc.setText("");
+			DevType.setText("");
+			devId.setText("");
+			DeviceInfo_time.setText("");
+			Sign_time.setText("");
+			Swiper_time.setText("");
+			passwd_time.setText("");
+			abstract_time.setText("");
+			query_time.setText("");
+			gain_data.setText("");
+			query_btn.setEnabled(false);
+			dialog_data_load.setVisibility(View.VISIBLE);
+		};
+	};
+	private Handler mHandler = new Handler() {
+
+		@Override
+		public void handleMessage(Message msg) {
+			boolean isDismiss = false;
+			Integer mint;
+			String mStr = null;
+			switch (msg.what) {
+			case 0xA0E0:// 金融IC卡脚本
+				money_script_time.setText((String) msg.obj);
+				break;
+			case 0xA1E0:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					money_script_data.setText(mStr + "~~返回码：" + mint);
+				else
+					money_script_data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA0E1:// 命令下发
+				common_data_time.setText((String) msg.obj);
+				break;
+			case 0xA1E1:
+				mStr = (String) msg.obj;
+				common_data.setText(mStr + "~~返回码："
+						+ ErrorHint.errorMap.get(Integer.parseInt(mStr)));
+				isDismiss = true;
+				break;
+			case 0xA0E2:// 切换至升级模式
+				up_time.setText((String) msg.obj);
+				break;
+			case 0xA1E2:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals("")) {
+					mStr = mStr.replace("执行成功！", "<font color='green'>执行成功！</font>");
+					up_model.setText(Html.fromHtml(mStr + "~~返回码：" + mint));
+				} else
+					up_model.setText(Html.fromHtml("<font color='red'>操作失败！</font>~~返回码：" + mint));
+				isDismiss = true;
+				break;
+			case 0xA0E3:// IC卡数据传输
+				data_time.setText((String) msg.obj);
+				break;
+			case 0xA1E3:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					data.setText(mStr + "~~返回码：" + mint);
+				else
+					data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA0E4:// IC卡复位
+				ic_reset_time.setText((String) msg.obj);
+				break;
+			case 0xA1E4:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals("")) {
+					if (mint == 0) {
+						ic_reset.setTextColor(Color.GREEN);
+						ic_reset.setText("成功!~~返回码：" + resetData[0]);
+					} else {
+						ic_reset.setTextColor(Color.RED);
+						ic_reset.setText(mStr + "~~返回码：" + mint);
+					}
+				} else {
+					ic_reset.setTextColor(Color.RED);
+					ic_reset.setText("失败!~~返回码：" + resetData[0]);
+				}
+				resetData = new String[1];
+				isDismiss = true;
+				break;
+			case 0xB1E4:// IC卡检测
+				int result = (Integer) msg.obj;
+				if (result == 5003) {
+					Log.d(TAG, "IC check 5003");
+					mIcCheckInfoTv.setTextColor(Color.GREEN);
+					mIcCheckInfoTv.setText("检测成功！~~返回码：" + result);
+				} else {
+					Log.d(TAG, "IC check 5002");
+					mIcCheckInfoTv.setTextColor(Color.RED);
+					mIcCheckInfoTv.setText("检测失败！~~返回码：" + result);
+				}
+				isDismiss = true;
+				break;
+			case 0xA0E5:// 获取设备ID
+				dev_Ver_time.setText((String) msg.obj);
+				break;
+			case 0xA1E5:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					dev_Ver.setText(mStr + "~~返回码：" + mint);
+				else
+					dev_Ver.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA0E6:// 获取电子现金余额
+				bal_time.setText((String) msg.obj);
+				break;
+			case 0xA1E6:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					bal_init.setText(mStr + "~~返回码：" + mint);
+				else
+					bal_init.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA0E7:// 电卡购电
+				ic_time.setText((String) msg.obj);
+				break;
+			case 0xA1E7:
+				mStr = (String) msg.obj;
+				ic_init.setText(mStr + "~~返回码：" + ErrorHint.errorMap.get(mStr));
+				isDismiss = true;
+				break;
+			case 0xA0E8:// 签到刷卡
+				Detection_time.setText((String) msg.obj);
+				break;
+			case 0xA1E8:
+				DevVersion_time.setText((String) msg.obj);
+				// byte[] tempbyte1={version[0],version[1]};
+				// byte[] tempbyte2=new byte[version.length-2];
+				// System.arraycopy(version, 2, tempbyte2, 0, tempbyte2.length);
+				// DevVersion.setText(Utils.ASCIItoHex(FM_Bytes.bytesToHexString(tempbyte1))+""+FM_Bytes.bytesToHexString(tempbyte2));
+				DevVersion.setText(Utils.ASCIItoHex(FM_Bytes.bytesToHexString(version)));
+				mSwipeCardDeviceInfoTv.setVisibility(View.VISIBLE);
+				break;
+			case 0xA0E9:
+				Sign_time.setText((String) msg.obj);
+				break;
+			case 0xA1E9:
+				new_Adc.setText("电量度：" + Adc[0] + "电压:" + Adc[1]);
+				DevType.setText(DevTypes[0]);
+				devId.setText(FM_Bytes.bytesToHexString(deviceId));
+				DeviceInfo_time.setText((String) msg.obj);
+				break;
+			case 0xA2E9:
+				gain_data.setText((String) msg.obj);
+				break;
+			case 0xA0E10:
+				Swiper_time.setText((String) msg.obj);
+				break;
+			case 0xA0E11:// 获取余额
+				passwd_time.setText((String) msg.obj);
+				break;
+			case 0xA0E12:
+				abstract_time.setText((String) msg.obj);
+				break;
+			case 0xA0E13:
+				query_time.setText((String) msg.obj);
+				break;
+			case 0xA1E13:
+				Toast.makeText(MainActivity.this, "获取网络数据 成功", Toast.LENGTH_SHORT).show();
+				gain_data.setText((String) msg.obj);
+				Lw.WriteLog(MainActivity.this, "显示数据" + gain_data.getText());
+				num++;
+				query_count.setText(num + "");
+				isDismiss = true;
+				break;
+
+			case 0xA0E14:// 更新密钥
+				update_time.setText((String) msg.obj);
+				break;
+			case 0xA1E14:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					update_data.setText(mStr + "~~返回码：" + mint);
+				else
+					update_data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+
+			case 0xA0E15:// 获取用户密码
+				password_time.setText((String) msg.obj);
+				break;
+			case 0xA1E15:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					password_data.setText(mStr + "~~返回码：" + mint + "~~结果：" + PIN_Block[0]);
+				else
+					password_data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA0E17:// 获取MAC
+				mac_time.setText((String) msg.obj);
+				break;
+			case 0xA1E17:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					mac_data.setText(mStr + "~~返回码：" + mint + "~~结果：" + MAC[0]);
+				else
+					mac_data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+
+			case 0xA0E18:// 写入密钥20
+				writekey_time.setText((String) msg.obj);
+				break;
+			case 0xA1E18:
+				mint = (Integer) msg.obj;
+				mStr = ErrorHint.errorMap.get(mint);
+				if (mStr != null && !mStr.equals(""))
+					writekey_data.setText(mStr + "~~返回码：" + mint);
+				else
+					writekey_data.setText("~~返回码：" + mint);
+				isDismiss = true;
+				break;
+			case 0xA1F00:// 获取IC卡55数据,非55数据
+				Toast.makeText(MainActivity.this,
+						"55数据:" + bankIcCard55Data[0] + "\n 非55数据:" + bankIcCardNo55Data[0],
+						Toast.LENGTH_LONG).show();
+				isDismiss = true;
+				break;
+			case -5:// IC卡55数据 失败
+				Toast.makeText(MainActivity.this, "IC卡55数据 获取失败", Toast.LENGTH_SHORT).show();
+				isDismiss = true;
+				break;
+			case -6:// IC卡非55数据 失败
+				Toast.makeText(MainActivity.this, "IC卡非55数据 获取失败", Toast.LENGTH_SHORT).show();
+				isDismiss = true;
+				break;
+			case -1:
+				dialog_data_load_txt.setText((String) msg.obj);
+				break;
+			case -2:
+				Toast.makeText(MainActivity.this, (String) msg.obj, Toast.LENGTH_SHORT).show();
+				isDismiss = true;
+				break;
+			}
+			if (isDismiss && MainActivity.dialog_data_load.getVisibility() != View.GONE)
+				MainActivity.dialog_data_load.setVisibility(View.GONE);
+		}
+
+	};
+
+	@Override
+	public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+		mSel = position;
+	}
+
+	@Override
+	public boolean onTouch(View v, MotionEvent event) {
+		return true;
+	}
+
+	public synchronized static String ReadSDData(String filename) {
+		try {
+			String mPath = Environment.getExternalStorageDirectory()
+					+ System.getProperty("file.separator") + filename;
+			BufferedReader in = new BufferedReader(new FileReader(mPath));
+			StringBuffer sb = new StringBuffer("");
+			String str = null;
+			while ((str = in.readLine()) != null)
+				sb.append(str);
+			String content = EncodingUtils.getString(sb.toString().getBytes(), "UTF-8");
+			in.close();
+			return content;
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	@Override
+	public boolean onKeyDown(int keyCode, KeyEvent event) {
+		if (keyCode == KeyEvent.KEYCODE_BACK && event.getRepeatCount() == 0) {
+			System.out.println("取消刷卡");
+			pm.SwiperCardCancel();// 断开连接，有延迟，建议在线程里实现
+			System.out.println("完毕");
+			if (dialog_data_load.getVisibility() != View.GONE) {
+				dialog_data_load_txt.setText("正在关闭通讯，请稍等");
+				Utils.HandData(mHandler, "已关闭！", -2);
+			} else if ((System.currentTimeMillis() - exitTime) > 1500) {
+				Toast.makeText(this, "再按一次退出程序", Toast.LENGTH_SHORT).show();
+				exitTime = System.currentTimeMillis();
+			} else {
+				finish();
+			}
+		}
+		return false;
+	}
+
+	@Override
+	protected void onDestroy() {
+		super.onDestroy();
+		if (pm != null)
+			pm.Destroy();
+		android.os.Process.killProcess(android.os.Process.myPid());
+		System.exit(0);
+	}
+
+	@Override
+	public void onNothingSelected(AdapterView<?> parent) {
+		// TODO Auto-generated method stub
+
+	}
+
+}

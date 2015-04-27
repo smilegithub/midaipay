@@ -1,0 +1,234 @@
+package com.fncat.xswipe.utils;
+
+import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.util.Log;
+
+/**
+ * 日志打印
+ * 
+ * @author Orion
+ * @create 2013-10-23下午5:03:26
+ */
+public class L {
+	private static boolean mLogFlag = false;
+	private static final String tag = "X_SDK";
+
+	/**
+	 * 防止实例化
+	 */
+	private L() {
+
+	}
+
+	/**
+	 * 开启日志打印，默认为打印状态
+	 */
+	public static void isOpenLog(boolean mLogFlags) {
+		mLogFlag = mLogFlags;
+	}
+
+	/**
+	 * 直接输出，V
+	 * 
+	 * @param str
+	 */
+	public static void v(String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.v(tag, str);
+			}
+		}
+	}
+
+	public static void v(String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.v(tag, str);
+			}
+		}
+	}
+
+	public static void v(Context mContext, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.v(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	public static void v(Context mContext, String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.v(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	/**
+	 * 直接输出，D
+	 * 
+	 * @param str
+	 */
+	public static void d(String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.d(tag, str);
+			}
+		}
+	}
+
+	public static void d(String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.d(tag, str);
+			}
+		}
+	}
+
+	public static void d(Context mContext, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.d(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	public static void d(Context mContext, String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.d(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	/**
+	 * 直接输出，I
+	 * 
+	 * @param str
+	 */
+	public static void i(String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.i(tag, str);
+			}
+		}
+	}
+
+	public static void i(String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.i(tag, str);
+			}
+		}
+	}
+
+	public static void i(Context mContext, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.i(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	public static void i(Context mContext, String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.i(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	/**
+	 * 直接输出，W
+	 * 
+	 * @param str
+	 */
+	public static void w(String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.w(tag, str);
+			}
+		}
+	}
+
+	public static void w(String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.w(tag, str);
+			}
+		}
+	}
+
+	public static void w(Context mContext, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.w(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	public static void w(Context mContext, String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.w(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	/**
+	 * 直接输出，E
+	 * 
+	 * @param str
+	 */
+	public static void e(String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.e(tag, str);
+			}
+		}
+	}
+
+	public static void e(String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.e(tag, str);
+			}
+		}
+	}
+
+	public static void e(Context mContext, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.e(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	public static void e(Context mContext, String tag, String str) {
+		if (mLogFlag) {
+			if (str != null) {
+				Log.e(tag, getAppInfo(mContext) + str);
+			}
+		}
+	}
+
+	/* 获取设备信息 */
+	private static String getAppInfo(Context mContext) {
+		String versionName = null;
+		String packageName = null;
+		int versionCode = -1;
+		try {
+			PackageManager pManager = mContext.getPackageManager();
+			PackageInfo pInfo = pManager.getPackageInfo(mContext.getPackageName(), 0);
+			versionName = pInfo.versionName;
+			packageName = pInfo.packageName;
+			versionCode = pInfo.versionCode;
+		} catch (NameNotFoundException e) {
+			e.printStackTrace();
+		}
+		return "versionName:" + versionName + " packageName:" + packageName + " versionCode:" + versionCode + " & ";
+	}
+}

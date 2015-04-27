@@ -1,0 +1,188 @@
+package com.fncat.xswipe.a_thread;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+import org.apache.http.message.BasicNameValuePair;
+import org.json.JSONObject;
+
+import android.os.Handler;
+import android.os.Looper;
+import android.view.View;
+import android.widget.LinearLayout;
+
+import com.fncat.xswipe.ErrorHint;
+import com.fncat.xswipe.HttpParam;
+import com.fncat.xswipe.MainActivity;
+import com.fncat.xswipe.controller.ErrorCode;
+import com.fncat.xswipe.controller.POSManage;
+import com.fncat.xswipe.utils.Utils;
+
+public class Sw extends Thread {
+	private Handler mHandler;
+	private POSManage pm;
+	private String mStr;
+	private LinearLayout dialog_data_load;
+	private int type;
+	private SimpleDateFormat sdf = new SimpleDateFormat("MMDDHHmmss");
+
+	public Sw(Handler mHandler, POSManage pm, String mStr, LinearLayout dialog_data_load, int type) {
+		this.mHandler = mHandler;
+		this.pm = pm;
+		this.mStr = mStr;
+		this.dialog_data_load = dialog_data_load;
+		this.type = type;
+	}
+
+	@Override
+	public void run() {
+		try {
+			Utils.HandData(mHandler, "未插入刷卡器，请插入刷卡器", -1);
+			long timer = System.nanoTime();// 刷卡器是否插入
+			while (!pm.isPluged()) {
+				Thread.sleep(300);// 每0.3秒判断一次
+				if (dialog_data_load.getVisibility() != View.VISIBLE) {
+					Utils.HandData(mHandler, "操作被中断", -2);
+					return;
+				}
+			}
+			Utils.HandData(mHandler, (System.nanoTime() - timer) / 1000000 + "毫秒", 0xA0E8);// 检测刷卡器耗时
+			pm.open();
+
+			Utils.HandData(mHandler, "正在获取设备信息，请稍等", -1);
+			timer = System.nanoTime();
+			int d = pm.getDeviceInfo(MainActivity.Adc, MainActivity.DevTypes,
+					MainActivity.deviceId, MainActivity.version);
+
+			if (d == ErrorCode.SUCCESS) {
+				Utils.HandData(mHandler, (System.nanoTime() - timer) / 1000000 + "毫秒", 0xA1E8);// 获取设备信息
+			} else if (d == ErrorCode.SYSTEM_BUSY) {
+				Utils.HandData(mHandler, "设备忙。。", -2);
+				return;
+			} else {
+				Utils.HandData(mHandler, "获取设备版本失败，错误码信息：" + ErrorHint.errorMap.get(d) + "~错误码："
+						+ d, -2);
+				return;
+			}
+			if (dialog_data_load.getVisibility() != View.VISIBLE) {
+				Utils.HandData(mHandler, "操作被中断", -2);
+				return;
+			}
+
+			if (type == 999) {
+				Utils.HandData(mHandler, "成功获取设备信息", -2);
+				return;
+			}
+
+			Utils.HandData(mHandler, "获取设备信息checkCode加密", -1);
+			timer = System.nanoTime();
+			byte[] random = new byte[9];
+			generateRandom(random);
+			d = pm.getSignInfo(random, MainActivity.Adc, MainActivity.DevTypes,
+					MainActivity.deviceId, MainActivity.checkCode);
+			if (d == ErrorCode.SUCCESS) {
+				Utils.HandData(mHandler, (System.nanoTime() - timer) / 1000000 + "毫秒", 0xA1E9);// 获取设备信息
+			} else if (d == ErrorCode.SYSTEM_BUSY) {
+				Utils.HandData(mHandler, "设备忙。。", -2);
+				return;
+			} else {
+				Utils.HandData(mHandler, "获取设备信息checkCode加密失败，错误码信息：" + ErrorHint.errorMap.get(d)
+						+ "~错误码：" + d, -2);
+				return;
+			}
+			if (dialog_data_load.getVisibility() != View.VISIBLE) {
+				Utils.HandData(mHandler, "操作被中断", -2);
+				return;
+			}
+			if (type == 1) {
+				Utils.HandData(mHandler, "成功获取设备信息", -2);
+				return;
+			}
+			Utils.HandData(mHandler, "网络签到", -1);
+			String mStrtime = getFormatTime();
+			if (mStrtime == null || mStrtime.equals("")) {
+				Utils.HandData(mHandler, "日期格式化错误", -2);
+				return;
+			}
+			boolean isSign = true;
+			if (type == 3) {
+				isSign = false;
+			}
+			if (isSign) {
+				List<BasicNameValuePair> mList = new ArrayList<BasicNameValuePair>();
+				mList.add(new BasicNameValuePair("TrDt", mStrtime));
+				mList.add(new BasicNameValuePair("userId", "12110600001"));
+				mList.add(new BasicNameValuePair("phoneID", Utils
+						.byteArray2Hex(MainActivity.deviceId)));
+				mList.add(new BasicNameValuePair("Random", Utils.byteArray2Hex(random)));
+				mList.add(new BasicNameValuePair("checkCode", Utils
+						.byteArray2Hex(MainActivity.checkCode)));
+				mList.add(new BasicNameValuePair("mac", ""));
+
+				timer = System.nanoTime();// 网络签到耗时
+				String mStr = new HttpParam().getStringData(this.mStr, mList, "GET", 0);
+				Utils.HandData(mHandler, (System.nanoTime() - timer) / 1000000 + "毫秒", 0xA0E9);
+				Utils.HandData(mHandler, mStr, 0xA2E9);
+				if (mStr != null && !mStr.equals("")) {
+					JSONObject mJSONObject = new JSONObject(mStr);
+					if (mJSONObject.has("RSPCD") && mJSONObject.getString("RSPCD").equals("00")) {
+						if (mJSONObject.has("RETBYTE")) {
+							System.arraycopy(
+									Utils.HexStringToByteArray(mJSONObject.getString("RETBYTE")),
+									0, MainActivity.encryptFactor, 0,
+									MainActivity.encryptFactor.length);
+						}
+					}
+				} else {
+					Utils.HandData(mHandler, " 网络链接失败", -2);
+					return;
+				}
+			} else {
+				System.arraycopy(Utils.HexStringToByteArray("7F18EC53ADEB599C"), 0,
+						MainActivity.encryptFactor, 0, MainActivity.encryptFactor.length);
+			}
+
+			if (dialog_data_load.getVisibility() != View.VISIBLE) {
+				Utils.HandData(mHandler, "操作被中断", -2);
+				return;
+			}
+
+			Utils.HandData(mHandler, "正在请求刷卡", -1);
+			timer = System.nanoTime();
+			// d = pm.requestSwipeCard(MainActivity.encryptFactor,
+			// MainActivity.Adc, "60055",
+			// "140918", "142850", (byte) 0x02);
+			// d = pm.requestSwipeCard(MainActivity.encryptFactor,
+			// MainActivity.Adc);
+			d = pm.requestSwipeCard("0101012020200011".getBytes(), MainActivity.Adc);
+			if (d == ErrorCode.SUCCESS) {
+				Utils.HandData(mHandler, " 请刷卡", -1);
+				Utils.HandData(mHandler, (System.nanoTime() - timer) / 1000000 + "毫秒", 0xA0E10);// 请求刷卡耗时
+			} else {
+				Utils.HandData(mHandler,
+						" 请求刷卡失败，错误码信息：" + ErrorHint.errorMap.get(d) + "~错误码：" + d, -2);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Utils.HandData(mHandler, " 操作异常", -2);
+		}
+	}
+
+	private void generateRandom(byte[] buffer) {
+		Random ran = new Random(System.nanoTime());
+		ran.nextBytes(buffer);
+	}
+
+	private String getFormatTime() {// 格式化时间
+		synchronized (sdf) {
+			try {
+				return sdf.format(new java.util.Date());
+			} catch (Exception e) {
+				e.printStackTrace();
+				return "";
+			}
+		}
+	}
+}

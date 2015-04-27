@@ -1,0 +1,338 @@
+package com.fncat.xswipe.controller;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.media.AudioManager;
+import cn.com.fmsh.util.FM_Bytes;
+
+import com.audioComm.audioDevice.AudioDevice;
+import com.audioComm.audioDevice.AudioVolumeModifier;
+import com.audioComm.audioDevice.ReadResult;
+import com.audioComm.config.Config;
+import com.audioComm.config.PhonePrefer;
+import com.audioComm.config.PhonePreferManager;
+import com.fncat.xswipe.utils.CRC16;
+import com.fncat.xswipe.utils.L;
+import com.fncat.xswipe.utils.Lw;
+import com.fncat.xswipe.utils.Utils;
+
+/**
+ * 新音频方案
+ * 
+ * @author Fncat
+ * @data 2014-4-6下午4:25:59
+ */
+public class AudioController {
+	private AudioDevice XAudio;
+	// 监听
+	private Event mEvent;
+	private Context mContext;
+	// 回调值
+	private volatile boolean isPlugin = false;// 是否插入
+	private volatile boolean isRunning = false;// 是否正在运行
+	private volatile boolean isTIMEOUT = true;// 超时
+
+	private ReadResult result;
+	private SendThread mSendThread = null;
+	private AudioVolumeModifier mAudioVolumeModifier;
+	private PhonePrefer mPhonePrefer;
+
+	public AudioController() {
+		L.e("初始化");
+		XAudio = AudioDevice.getInstance();
+		XAudio.setSyncTimeout(Config.parseAudioDataTimeOut, 6 * 1000);
+		mPhonePrefer = PhonePreferManager.getPhonePrefer(PhonePreferManager.LI_GUANG_HUI_1);
+		XAudio.setParams(mPhonePrefer);
+	}
+
+	/**
+	 * 耳机插拔监听
+	 * 
+	 * @param mContexts
+	 * @param mEvents
+	 * @return
+	 */
+	public boolean setListener(Context mContexts, Event mEvents) {
+		boolean isReceiver = false;
+		if (mContexts == null) {
+			return isReceiver;
+		}
+		if (this.mContext != null) {// 说明已经设置过,再次设置广播需先注销广播
+			try {
+				this.mContext.unregisterReceiver(mHeadsetListener);
+			} catch (Exception e) {
+				L.e("音频注销广播崩溃");
+			}
+		}
+		this.mContext = mContexts;
+		mAudioVolumeModifier = new AudioVolumeModifier(mContexts);
+		mEvent = mEvents;
+		try {// 广播注册容易崩溃
+			IntentFilter mAudioMonitorFilter = new IntentFilter();
+			mAudioMonitorFilter.addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
+			mAudioMonitorFilter.addAction(Intent.ACTION_HEADSET_PLUG);
+			mAudioMonitorFilter.setPriority(1000);// 提高广播接受优先级
+			mContext.registerReceiver(mHeadsetListener, mAudioMonitorFilter);
+			isReceiver = true;
+			L.e("监听广播");
+		} catch (Exception e) {
+			L.e("音频注册广播异常！");
+		}
+		return isReceiver;
+	}
+
+	private void CancelListener() {
+		if (mContext != null) {
+			try {
+				mContext.unregisterReceiver(mHeadsetListener);
+			} catch (Exception e) {
+				L.e("音频注销广播异常！");
+			}
+		}
+		mAudioVolumeModifier = null;
+		mContext = null;
+	}
+
+	private BroadcastReceiver mHeadsetListener = new BroadcastReceiver() {
+
+		@Override
+		public void onReceive(Context context, Intent intent) {
+			if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {// 音频转换转换
+				setPlugout();
+			} else if (intent.getAction().equals(Intent.ACTION_HEADSET_PLUG)) {// 耳机插拔
+				if (intent.hasExtra("state")) {
+					if (intent.getIntExtra("state", 0) == 0) {// 拔出
+						setPlugout();
+					} else if (intent.getIntExtra("state", 0) == 1) {// 插入
+						setPlugin();
+					}
+				}
+			}
+		}
+
+	};
+
+	// 插入
+	private void setPlugin() {
+		if (!isPlugin) {
+			isPlugin = true;
+			setEvent(POSManage.Plugin, isPlugin);
+		}
+	}
+
+	// 拔出
+	private void setPlugout() {
+		if (isPlugin) {
+			closeCswiper(true);
+			isRunning = false;
+			isPlugin = false;
+			setEvent(POSManage.Plugout, isPlugin);
+		}
+	}
+
+	// 设置Debug模式
+	public void setDebugMode(boolean f) {
+		XAudio.setLogcat(f, f);
+	}
+
+	// 打开刷卡器
+	public boolean openCswiper() {
+		if (!isPlugin || XAudio.open() != ErrorCode.SUCCESS) {
+			return false;
+		}
+		return true;
+	}
+
+	// 是否插入
+	public boolean getPlugIn() {
+		return isPlugin;
+	}
+
+	// 关闭刷卡器
+	public void closeCswiper(boolean isInterrupt) {
+		if (mSendThread != null) {// 发送超时或者发送完毕
+			if (mSendThread.isAlive()) {// 如果线程还在运行，及没有发送完毕
+				mSendThread.interrupt();
+			}
+			mSendThread = null;
+		}
+		if (isInterrupt) {
+			isRunning = false;
+			L.e("开始取消");
+			XAudio.close();
+			L.e("取消完毕");
+		}
+	}
+
+	// 释放SDK,自行取消监听和关闭
+	public void Destroy() {
+		CancelListener();
+		if (mAudioVolumeModifier != null)
+			mAudioVolumeModifier.recoverToPreviousVolume();
+		mPhonePrefer = null;
+		XAudio = null;
+	}
+
+	/**
+	 * 下发指令并获取返回的指令,CRC校验
+	 * 
+	 * @param command
+	 * @param time
+	 * @return
+	 */
+	public byte[] getCSwiper(String command, int timeout) {
+		try {
+			if (!isPlugin) {// 设备拔出
+				return Utils.IntToHex(ErrorCode.NOT_OPEN_DEVICE);
+			}
+			if (isRunning) {// 已经在运行
+				return Utils.IntToHex(ErrorCode.SYSTEM_BUSY);
+			} else
+				isRunning = true;
+
+			if (!openCswiper()) {// 没有打开刷卡器
+				isRunning = false;
+				return Utils.IntToHex(ErrorCode.NOT_OPEN_DEVICE);
+			}
+			if (mAudioVolumeModifier != null) {
+				int temp = mAudioVolumeModifier.setRandomVolume(mPhonePrefer.getMinVoiceVolume());
+				if (temp != ErrorCode.SUCCESS) {
+					isRunning = false;
+					return Utils.IntToHex(ErrorCode.Hbyte + temp);
+				}
+			} else
+				return Utils.IntToHex(ErrorCode.AUDIO_VOLUME_LIMITED);
+
+			mSendThread = new SendThread(Thread.currentThread(), command);
+			mSendThread.start();// 起个线程发数据，并等待获取数据
+			isTIMEOUT = true;
+			synchronized (Thread.currentThread()) {// 线程同步等待
+				Thread.currentThread().wait(timeout * 1000);
+			}
+			closeCswiper(false);
+			byte[] response;
+			if (isTIMEOUT) {
+				response = Utils.IntToHex(ErrorCode.Common_TIMEOUT);
+			} else if (isRunning) {
+				if (result != null) {
+					if (result.flag != ErrorCode.SUCCESS)
+						response = Utils.IntToHex(result.flag);
+					else
+						response = result.data;
+				} else {
+					response = Utils.IntToHex(ErrorCode.RECV_DATA_ERROR);
+				}
+			} else
+				response = Utils.IntToHex(ErrorCode.Common_Interrupt);
+			isRunning = false;
+			Lw.WriteLog(mContext, "最终结果：" + FM_Bytes.bytesToInt(response));
+			return response;
+		} catch (Exception e) {
+			closeCswiper(false);
+			isRunning = false;
+			e.printStackTrace();
+			Lw.WriteLog(mContext, "最终结果：发送异常！");
+			return Utils.IntToHex(ErrorCode.UNKNOW_ERROR);
+		}
+
+	}
+
+	/**
+	 * 收发线程
+	 * 
+	 * @author Fncat
+	 * @data 2014-4-23下午8:07:16
+	 */
+	private class SendThread extends Thread {
+		private String command;
+		private Thread mThread;
+
+		public SendThread(Thread mThread, String command) {
+			this.mThread = mThread;
+			this.command = command;
+		}
+
+		@Override
+		public void run() {
+			try {
+				byte[] data = FM_Bytes.hexStringToBytes(command);
+				byte[] crcBytes = CRC16.calcCrc(data);
+				byte[] request = new byte[data.length + 2];
+				System.arraycopy(data, 0, request, 0, data.length);
+				System.arraycopy(crcBytes, 0, request, data.length, 2);
+				String show = "即将发送的数据为: " + FM_Bytes.bytesToHexString(request);
+
+				int mCount = 0;
+				L.e(isPlugin + "," + isRunning + "," + !Thread.interrupted() + "," + mCount);
+				while (isPlugin && isRunning && !Thread.interrupted() && mCount < 3) {// CRC错误则会重发三次
+					mCount++;
+					L.e("发送的数据:" + show);
+					Lw.WriteLog(mContext, show);
+
+					getOrder(request);// 发送数据
+
+					if (result.flag == ErrorCode.SYSTEM_BUSY) {// 设备忙
+						result.flag = ErrorCode.SYSTEM_BUSY;
+						break;
+					} else if (result.flag != ErrorCode.SUCCESS) {// 发送获取失败的错误信息
+						L.e("底层返回的错误码：" + result.flag);
+						Lw.WriteLog(mContext, "底层返回的错误码：" + result.flag);
+						result.flag = ErrorCode.Hbyte + result.flag;
+						break;
+					} else if (result.data != null) {// 发送成功
+						final String msg = FM_Bytes.bytesToHexString(result.data);
+						Lw.WriteLog(mContext, "READ：" + msg);
+						L.e("READ:" + msg);
+						byte[] respon = new byte[result.data.length - 2];
+						System.arraycopy(result.data, 0, respon, 0, result.data.length - 2);
+						byte[] crcChecking = CRC16.calcCrc(respon);
+						if (result.data[result.data.length - 2] == crcChecking[0] && result.data[result.data.length - 1] == crcChecking[1]) {
+							break;
+						}
+
+					} else {
+						result.flag = ErrorCode.RECV_DATA_ERROR;// 获取到数据，但是数据为null
+						break;
+					}
+				}
+				if (mCount > 2) {
+					result.flag = ErrorCode.CRC_ERROR;
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+				L.e("发送数据唤醒App子线程异常！");
+				result.flag = ErrorCode.ERR_DEVICE_UNKOWN;
+			}
+			synchronized (mThread) {
+				isTIMEOUT = false;
+				mThread.notify();
+			}
+		}
+	}
+
+	/**
+	 * 收发数据
+	 * 
+	 * @param packets
+	 * @return
+	 */
+	private void getOrder(byte[] packets) throws Exception {
+		result = XAudio.interacte(AudioDevice.CMD_NORMAL_REQUEST, packets);
+	}
+
+	/**
+	 * 回调接口
+	 * 
+	 * @param what
+	 * @param obj
+	 */
+	private void setEvent(int what, Object obj) {
+		try {
+			mEvent.setEvent(what, obj);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+}

@@ -1,0 +1,2111 @@
+package com.fncat.xswipe.controller;
+
+import java.util.Arrays;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
+import android.util.Log;
+import cn.com.fmsh.util.FM_Bytes;
+
+import com.fncat.xswipe.utils.L;
+import com.fncat.xswipe.utils.Lw;
+import com.fncat.xswipe.utils.Utils;
+
+/**
+ * 
+ * @author alex操作刷卡器的工具类
+ * 
+ */
+public class POSManage {
+	private static final String TAG = "UN_SDK";
+
+	public static final int Plugin = 0x21C0;
+	public static final int Plugout = 0x21C1;
+	public static final int Error = 0x21C2;
+	public static final int CardNum = 0x21C3;
+	public static final int CardData = 0x21C4;
+	public static final int CardInfo = 0x21C5;
+	public static final int DETECTICCARD = 0x21C6;
+	public static final int ICCARDNUM = 0x21C7;
+	public static final int STARTADAPTE = 0x21C8;
+	public static final int ADAPTEFINSH = 0x21C9;
+
+	private static POSManage mPOSManage = null;
+	private AudioController control;
+	private int TIME_OUT_NORMAL = 20;// 设置超时时间
+	private StatusListener listener = null;
+	private Context context;
+	private final String mVersion = "1.1.1.24";// SDK版本
+	private Thread mCThread;
+	public static Boolean mBoolean;
+
+	private String sn_result = null;
+	private String cardRandom = null;
+
+	private byte[] encryptFactor = new byte[8];// 存储服务器下发的分散因子
+
+	private SubThreadLooper mSubThreadLooper;
+	private Handler handler = null;// 回调消息队列
+	private Looper looper = null;
+	private byte[] eventLock = null;// 事件分发互斥锁
+
+	private POSManage() {
+		this.eventLock = new byte[0];
+		looper = Looper.myLooper();
+		if (looper == null) {
+			mSubThreadLooper = new SubThreadLooper();// 运行在子线程
+			mSubThreadLooper.start();
+		} else {
+			MainThreadLooper();// 运行在主线程
+		}
+		mBoolean = false;
+		control = new AudioController();
+	}
+
+	public synchronized static POSManage getInstance() {
+		if (mPOSManage == null) {
+			mPOSManage = new POSManage();
+		}
+		return mPOSManage;
+	}
+
+	/**
+	 * @return刷卡器是否插入
+	 */
+	public boolean isPluged() {
+		return control.getPlugIn();
+	}
+
+	/**
+	 * 打印记录日志
+	 */
+	public void setDebugMode(boolean isDebugMode) {
+		L.isOpenLog(isDebugMode);
+		Lw.setWrite(isDebugMode);
+		control.setDebugMode(isDebugMode);
+	}
+
+	/**
+	 * @return打开刷卡器
+	 */
+	public boolean open() {
+		return control.openCswiper();
+	}
+
+	public void close() {
+		Destroy();
+	}
+
+	/**
+	 * 释放SDK
+	 */
+	public void Destroy() {
+		SwiperCardCancel();
+		if (control != null) {
+			control.Destroy();
+			control = null;
+		}
+		if (mSubThreadLooper != null) {
+			mSubThreadLooper.interrupt();
+			mSubThreadLooper = null;
+		}
+		mPOSManage = null;
+	}
+
+	/**
+	 * 获取终端信息
+	 */
+	public int getDeviceInfo(int[] Adc, String[] DevType, byte[] devId, byte[] version) {
+		try {
+			if (Adc == null || DevType == null || devId == null || version == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			if (Adc.length < 2 || DevType.length < 1 || devId.length != 8 || version.length != 9) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("01", TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				Adc[0] = (int) arr[3];// 电量等级
+				byte[] adcs = new byte[2];
+				System.arraycopy(arr, 1, adcs, 0, 2);
+				Adc[1] = FM_Bytes.bytesToInt(adcs);
+				byte[] mDeviceType = new byte[15];// 设备类型
+				System.arraycopy(arr, 4, mDeviceType, 0, 15);
+				DevType[0] = new String(mDeviceType, "utf-8");
+				System.arraycopy(arr, 19, devId, 0, 8);
+				if (arr.length > 35)// 是否存在固件编号
+					System.arraycopy(arr, 27, version, 0, 9);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				int s = Utils.byteArrayToInt(arr);
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获取获取终端信息错误" + e.getMessage());
+			System.out.println("获取获取终端信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 请求刷卡 (需要进行判断状态)
+	 */
+	public int requestSwipeCard(byte[] factor, int[] Adc) {
+		try {
+			if (factor == null || Adc == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			if (factor.length < 1 || Adc.length < 1) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			System.arraycopy(factor, 0, this.encryptFactor, 0, this.encryptFactor.length);
+			SwiperCardCancel();
+			byte[] ret = control.getCSwiper(("03" + FM_Bytes.bytesToHexString(factor)).toUpperCase(), TIME_OUT_NORMAL);
+			if (ret == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (ret[0] == (byte) 0x77 && ret[1] == (byte) 0x09) { // 检测到IC卡
+				/**
+				 * 检测到IC卡回调 
+				 * 7d0807获取IC卡卡号
+				 */
+				setEvent(DETECTICCARD, null);
+				getIcCardNum();
+				return ErrorCode.SUCCESS;
+			} else if (ret[0] == (byte) 0x77 && ret[1] == (byte) 0x07) { // 未检测到IC卡
+				if (ret[0] == (byte) 0x90)
+					Adc[0] = (int) ret[3];// 电量等级
+				mCThread = new Thread(new getCardInfo());
+				mCThread.start();
+				if (mCThread.isAlive())
+					return ErrorCode.SUCCESS;
+				else {
+					return ErrorCode.UNKNOW_ERROR;
+				}
+			} else if (ret[0] == (byte) 0x90 || ret[1] == (byte) 0x0B) {// 或已经开启
+				if (ret[0] == (byte) 0x90)
+					Adc[0] = (int) ret[3];// 电量等级
+				mCThread = new Thread(new getCardInfo());
+				mCThread.start();
+				if (mCThread.isAlive())
+					return ErrorCode.SUCCESS;
+				else {
+					return ErrorCode.UNKNOW_ERROR;
+				}
+			} else if (ret.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { ret[0], ret[1] });
+			} else {
+				int error = ErrorNum(ret);
+				setEvent(Error, error);
+				return error;
+			}
+		} catch (Exception e) {
+			SwiperCardCancel();
+			Lw.WriteLog(context, "刷卡请求错误：" + e.getMessage());
+			System.out.println("刷卡请求错误：" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获取卡号和卡磁
+	 */
+	private class getCardInfo implements Runnable {
+		@Override
+		public void run() {
+			try {
+				String accNo = null;
+				mBoolean = true;
+				while (!Thread.interrupted() && isPluged() && mBoolean) {
+					Thread.sleep(300);
+					byte[] bytAccNo = control.getCSwiper("04", TIME_OUT_NORMAL);// 获取卡号
+					if (mBoolean && bytAccNo == null) {
+						mBoolean = false;
+						setEvent(Error, ErrorCode.Device_Card_NULL);
+					} else if (mBoolean && bytAccNo[0] == (byte) 0x77 && bytAccNo[1] == (byte) 0x09) { // 检测到IC卡
+						/**
+						 * 检测到IC卡回调 
+						 * 7d0807获取IC卡卡号
+						 */
+						setEvent(DETECTICCARD, null);
+						getIcCardNum();
+						break;
+					} else if (mBoolean && bytAccNo[0] == (byte) 0x77 && bytAccNo[1] == (byte) 0x07) { // 未检测到IC卡
+						// 未检测到IC卡 继续发送04指令
+					} else if (mBoolean && bytAccNo[0] == (byte) 0x90) {
+						byte[] bytAcc = new byte[(int) bytAccNo[1]];// 获取长度
+						System.arraycopy(bytAccNo, 2, bytAcc, 0, bytAcc.length);
+						accNo = new String(bytAcc);
+						setEvent(CardNum, accNo);
+						break;
+					} else if (mBoolean && Arrays.equals(bytAccNo, Utils.IntToHex(ErrorCode.SYSTEM_BUSY))) {
+						mBoolean = false;
+						setEvent(Error, ErrorCode.SYSTEM_BUSY);
+					} else if (mBoolean && bytAccNo[0] == (byte) 0x77 && bytAccNo[1] == (byte) 0x08) {
+						setEvent(0xC, ErrorCode.SWIPE_CARD_FAIL);
+					}
+				}
+				if ((accNo == null || accNo.equals("")) && mBoolean) {
+					setEvent(0xC, ErrorCode.Device_Card_NULL);
+					mBoolean = false;
+				}
+				int mCount = 0;
+				while (!Thread.interrupted() && isPluged() && mBoolean) {
+					byte[] bytEncNo = control.getCSwiper("05", TIME_OUT_NORMAL);// 获取卡磁
+					if (mBoolean && bytEncNo == null) {
+						mBoolean = false;
+						setEvent(Error, ErrorCode.Device_encrypt_NULL);
+					} else if (mBoolean && bytEncNo[0] == (byte) 0x90) {
+						byte[] bytEnc = new byte[(int) bytEncNo[1]];
+						System.arraycopy(bytEncNo, 2, bytEnc, 0, bytEnc.length);
+						setEvent(CardData, bytEnc);
+						if (listener != null) {
+							listener.onCardInfo(accNo, bytEnc);
+						}
+						mBoolean = false;
+					} else if (mBoolean && bytEncNo[0] == (byte) 0x00) {
+						setEvent(Error, ErrorCode.SYSTEM_BUSY);
+						mBoolean = false;
+					}
+					if (mBoolean && mCount >= 20) {
+						mBoolean = false;
+						setEvent(Error, ErrorCode.Device_encrypt_1);
+						break;
+					}
+					mCount++;
+					Thread.sleep(300);
+				}
+			} catch (Exception e) {
+				setEvent(Error, ErrorCode.UNKNOW_ERROR);
+				e.printStackTrace();
+			}
+		}
+	}
+
+	/**
+	 * 命令刷卡操作
+	 */
+	public int SwiperCardCancel() {
+		if (mBoolean) {// 防止获取到卡磁后调用中断
+			Log.e("刷卡取消", "命令");
+			Lw.WriteLog(context, "刷卡取消命令");
+			mBoolean = false;
+			if (mCThread != null && mCThread.isAlive())
+				mCThread.interrupt();
+			mCThread = null;
+			// control.getCSwiper("06", TIME_OUT_NORMAL);//
+			// 会发出响声，可能是拔出的广播没来得及执行就先执行关闭刷卡器的命令了
+		}
+		if (control != null)
+			control.closeCswiper(true);
+		return ErrorCode.SUCCESS;
+	}
+
+	/**
+	 * 加密数据
+	 */
+	public byte[] encryptDigest(byte keyIndex, byte[] digest, byte[] factor, int[] Adc, int error) {
+		if (digest == null || factor == null || Adc == null) {
+			error = ErrorCode.INPUT_PARAMS;
+			return null;
+		}
+		if (digest.length < 6 || factor.length != 8 || Adc.length < 1) {
+			error = ErrorCode.INPUT_PARAMS;
+			return null;
+		}
+		StringBuilder sb = new StringBuilder("");
+		String stmp = "";
+		sb.append("02");
+		int hig = (digest.length & 0xff00) >> 8;
+		int low = digest.length & 0xff;
+		// 长度
+		stmp = Integer.toHexString(hig);
+		sb.append((stmp.length() == 1) ? "0" + stmp : stmp);
+
+		String stLow = Integer.toHexString(low);
+		sb.append((stLow.length() == 1) ? "0" + stLow : stLow);
+
+		// keyIndex
+		stmp = Integer.toHexString(keyIndex);
+		sb.append((stmp.length() == 1) ? "0" + stmp : stmp);
+
+		// 分散因子
+
+		for (int i = 0; i < factor.length; i++) {
+			stmp = Integer.toHexString(factor[i] & 0xff);
+			sb.append((stmp.length() == 1) ? "0" + stmp : stmp);
+		}
+
+		// 数据
+		for (int i = 0; i < digest.length; i++) {
+			stmp = Integer.toHexString(digest[i] & 0xff);
+			sb.append((stmp.length() == 1) ? "0" + stmp : stmp);
+		}
+		SwiperCardCancel();
+		byte[] ret = control.getCSwiper(sb.toString().toUpperCase(), TIME_OUT_NORMAL);
+
+		if (ret == null) {
+			error = ErrorCode.GET_DEVICE_INFO_FAIL;
+			return null;
+		} else if (ret[0] == (byte) 0x90) {
+			Adc[0] = (int) ret[3];
+			byte[] encryptData = new byte[ret.length - 6];
+
+			System.arraycopy(ret, 4, encryptData, 0, encryptData.length);
+			Log.e("加密字数：", encryptData.length + "");
+			error = ErrorCode.SUCCESS;
+			return encryptData;
+		} else if (ret.length > 3) {// 非错误码，是指令数据
+			if (ret == Utils.IntToHex(ErrorCode.SYSTEM_BUSY)) {
+				setEvent(0xC, ErrorCode.SYSTEM_BUSY);
+			}
+			error = ErrorNum(new byte[] { ret[0], ret[1] });
+			return null;
+		} else {
+			error = ErrorNum(ret);
+			return null;
+		}
+
+	}
+
+	/**
+	 * 设置监听者
+	 * 
+	 */
+	public boolean setListener(Context context, StatusListener listener) {
+		this.context = context;
+		this.listener = listener;
+		return control.setListener(context, mEvents);
+	}
+
+	/**
+	 * 获取当前SDK版本
+	 */
+	public String getSDKVersion() {
+		return mVersion;
+	}
+
+	/**
+	 * 签到
+	 */
+	public int getSignInfo(byte[] random, int[] Adc, String[] DevType, byte[] devId, byte[] checkCode) {
+		try {
+			if (random == null || Adc == null || DevType == null || devId == null || checkCode == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			if (random.length != 9 || Adc.length < 2 || DevType.length < 1 || devId.length != 8
+					|| checkCode.length != 16) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("07" + FM_Bytes.bytesToHexString(random), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				Adc[0] = (int) arr[3];// 电量等级
+				byte[] adcs = new byte[2];
+				System.arraycopy(arr, 1, adcs, 0, 2);
+				Adc[1] = FM_Bytes.bytesToInt(adcs);
+				byte[] mDeviceType = new byte[15];// 设备类型
+				System.arraycopy(arr, 4, mDeviceType, 0, 15);
+				DevType[0] = new String(mDeviceType, "utf-8");
+				System.arraycopy(arr, 19, devId, 0, 8);
+				System.arraycopy(arr, 27, checkCode, 0, 16);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			Lw.WriteLog(context, "获取获取终端信息错误" + e.getMessage());
+			System.out.println("获取获取终端信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;// 未知错误
+		}
+	}
+
+	/**
+	 * 写入密钥 key密钥格式:KeyLength(1byte) + DisperseFlag(1byte) + KeyIndex(1byte) +
+	 * Algorithm(1byte) + KeyValue(16 byte)
+	 */
+	public int FactoryKeyWrite(byte[] ID, String[] key) {
+		try {
+			if (ID == null || ID.length != 8 || key == null || key.length > 3) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			byte[] KeyWrite = new byte[ID.length];
+			System.arraycopy(ID, 0, KeyWrite, 0, ID.length);
+			for (int i = 0; i < key.length; i++) {
+				byte[] mKeys = FM_Bytes.hexStringToBytes(key[i]);
+
+				byte[] mWrites = new byte[KeyWrite.length + mKeys.length + 1];
+
+				System.arraycopy(KeyWrite, 0, mWrites, 0, KeyWrite.length);
+
+				mWrites[KeyWrite.length] = (byte) (mKeys.length - 3);
+
+				System.arraycopy(mKeys, 0, mWrites, KeyWrite.length + 1, mKeys.length);
+
+				KeyWrite = new byte[mWrites.length];
+				System.arraycopy(mWrites, 0, KeyWrite, 0, KeyWrite.length);
+			}
+			if (KeyWrite.length == 0)
+				return ErrorCode.INPUT_PARAMS;
+			Log.e("写入密钥", FM_Bytes.bytesToHexString(KeyWrite));
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("10" + FM_Bytes.bytesToHexString(KeyWrite), TIME_OUT_NORMAL);
+			Log.e("返回值", FM_Bytes.bytesToHexString(arr));
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				control.getCSwiper("3004", TIME_OUT_NORMAL);
+				byte[] arrx = control.getCSwiper("01", TIME_OUT_NORMAL);
+				byte[] arrs = new byte[8];
+				System.arraycopy(arrx, 19, arrs, 0, 8);
+				Log.e("比较",
+						FM_Bytes.bytesToHexString(ID) + ":::" + FM_Bytes.bytesToHexString(arrx) + ":::"
+								+ FM_Bytes.bytesToHexString(arrs) + ":::");
+				if (Arrays.equals(ID, arrs)) {
+					return ErrorCode.SUCCESS;
+				} else
+					return -1;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "写入密钥错误" + e.getMessage());
+			System.out.println("写入密钥错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 写入密钥 key密钥格式:KeyLength(1byte) + DisperseFlag(1byte) + KeyIndex(1byte) +
+	 * Algorithm(1byte) + KeyValue(16 byte)
+	 */
+	public int KeyWrite(String key) {
+		try {
+			if (key == null || key.length() == 0) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			Log.e("写入密钥", key);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("20" + key, TIME_OUT_NORMAL);
+			Log.e("返回值", FM_Bytes.bytesToHexString(arr));
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				control.getCSwiper("3004", TIME_OUT_NORMAL);
+				byte[] arrx = control.getCSwiper("01", TIME_OUT_NORMAL);
+				byte[] arrs = new byte[8];
+				System.arraycopy(arrx, 19, arrs, 0, 8);
+				String ID1 = key.substring(0, 16);
+				String ID2 = FM_Bytes.bytesToHexString(arrs);
+				Log.e("比较", ID1 + ":::" + FM_Bytes.bytesToHexString(arrx) + ":::" + ID2 + ":::");
+				if (ID1.equals(ID2)) {
+					return ErrorCode.SUCCESS;
+				} else
+					return -1;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "写入密钥错误" + e.getMessage());
+			System.out.println("写入密钥错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 配置设备文件和应用文件 Devfile设备文件格式：Id[2bytes] +
+	 * KSN[8bytes]+Model[4bytes]+Version[4bytes]
+	 * Appfile应用文件格式：App_num[2bytes]+User_info[16bytes]+Reserve[6bytes]
+	 */
+	public int InitDevFileAndAppFile(byte[] Id, byte[] KSN, byte[] Model, byte[] Version, byte[] App_num,
+			byte[] User_info, byte[] Reserve) {
+		try {
+			if (Id == null || KSN == null || Model == null || Version == null || App_num == null || User_info == null
+					|| Reserve == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			if (Id.length != 2 || KSN.length < 8 || Model.length < 4 || Version.length != 4 || App_num.length != 2
+					|| User_info.length != 16 || Reserve.length != 6) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			byte[] mFile = new byte[42];
+			System.arraycopy(Id, 0, mFile, 0, Id.length);
+			System.arraycopy(KSN, 0, mFile, 3, KSN.length);
+			System.arraycopy(Model, 0, mFile, 11, Model.length);
+			System.arraycopy(Version, 0, mFile, 15, Version.length);
+			System.arraycopy(App_num, 0, mFile, 19, App_num.length);
+			System.arraycopy(User_info, 0, mFile, 21, User_info.length);
+			System.arraycopy(Reserve, 0, mFile, 37, Reserve.length);
+			byte[] arr = control.getCSwiper("11" + FM_Bytes.bytesToHexString(mFile), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "配置设备文件和应用文件错误" + e.getMessage());
+			System.out.println("配置设备文件和应用文件错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * UN:更新密钥
+	 * 
+	 * @param key
+	 * @return
+	 */
+	public int Change_KEY(String key) {
+		try {
+			if (key == null || key.length() != 104) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("21" + key, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "UN:更新密钥错误" + e.getMessage());
+			System.out.println("UN:更新密钥错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * UN:获取用户密码~~获取PIN_Block
+	 * 
+	 * @return
+	 */
+	public int GetPinBlock(byte[] pin, String[] PIN_Block) {
+		try {
+			if (pin == null || pin.length != 16 || PIN_Block == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("23" + FM_Bytes.bytesToHexString(pin), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				byte[] getBankIcCardReversalInfos = new byte[8];
+				System.arraycopy(arr, 1, getBankIcCardReversalInfos, 0, getBankIcCardReversalInfos.length);
+				PIN_Block[0] = FM_Bytes.bytesToHexString(getBankIcCardReversalInfos);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "UN:获取用户密码~获取PIN_Block错误" + e.getMessage());
+			System.out.println("UN:获取用户密码~获取PIN_Block错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * UN:计算MAC
+	 * 
+	 * @return
+	 */
+	public int GetMAC(String MACdata, String[] MAC) {
+		try {
+			if (MACdata == null || MACdata.length() == 0 || MACdata.length() % 2 != 0 || MAC == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("24" + MACdata, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				byte[] getBankIcCardReversalInfos = new byte[8];
+				System.arraycopy(arr, 1, getBankIcCardReversalInfos, 0, getBankIcCardReversalInfos.length);
+				MAC[0] = FM_Bytes.bytesToHexString(getBankIcCardReversalInfos);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "UN:计算MAC错误" + e.getMessage());
+			System.out.println("UN:计算MAC错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * ETC接口=============================================================
+	 */
+	// 获得ETC卡卡号与卡类型
+	public String Etc_GetCardNoType(String strTermId) {
+		try {
+			byte[] mstrTermId = FM_Bytes.hexStringToBytes(strTermId);
+			byte[] st = new byte[5 + mstrTermId.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x06;
+			st[2] = (byte) 0x00;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) mstrTermId.length;
+			System.arraycopy(mstrTermId, 0, st, 5, mstrTermId.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] GetCardNoType = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, GetCardNoType, 0, GetCardNoType.length);
+				byte[] type = new byte[1];
+				type[0] = GetCardNoType[0];
+				String cardType = FM_Bytes.bytesToHexString(type);
+				String carNo = null;
+				byte[] no = new byte[8];
+				System.arraycopy(GetCardNoType, 1, no, 0, 8);
+				carNo = FM_Bytes.bytesToHexString(no);
+				return carNo + "|$" + cardType;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得ETC卡卡号与卡类型错误" + e.getMessage());
+			System.out.println("获得ETC卡卡号与卡类型错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 验证ETC卡卡密
+	 */
+	public int Etc_VerifyPass(String strpass) {
+		try {
+			byte[] mstrpass = strpass.getBytes();
+			byte[] st = new byte[5 + mstrpass.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x06;
+			st[2] = (byte) 0x01;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) mstrpass.length;
+			System.arraycopy(mstrpass, 0, st, 5, mstrpass.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length < 3) {
+				return Utils.byteArrayToInt(arr);
+			} else {
+				return ErrorCode.SUCCESS;
+				// Lw.WriteLog(context, "获错误码" + arr[1] + "");
+				// System.out.println("获错误码" + arr[1] + "");
+				// return ErrorNum(arr[1]);// 错误码
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "验证ETC卡卡密错误" + e.getMessage());
+			System.out.println("验证ETC卡卡密错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得ETC卡信息
+	 */
+	public String Etc_GetCardInfo() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x06, (byte) 0x03,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] Etc_GetCardInfo = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, Etc_GetCardInfo, 0, Etc_GetCardInfo.length);
+				byte[] cardNo = new byte[8];
+				String cardNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 0, cardNo, 0, 8);
+				cardNoS = FM_Bytes.bytesToHexString(cardNo);
+				byte[] netNo = new byte[2];
+				String netNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 8, netNo, 0, 2);
+				netNoS = FM_Bytes.bytesToHexString(netNo);
+				byte[] termID = new byte[6];
+				String termIDs = null;
+				System.arraycopy(Etc_GetCardInfo, 10, termID, 0, 6);
+				termIDs = FM_Bytes.bytesToHexString(termID);
+				return cardNoS + "|$" + netNoS + "|$" + termIDs;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得ETC卡信息错误" + e.getMessage());
+			System.out.println("获得ETC卡信息错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * ETC储值卡查询
+	 */
+	public String Etc_ValueCardQuery() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x06, (byte) 0x02,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] Etc_GetCardInfo = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, Etc_GetCardInfo, 0, Etc_GetCardInfo.length);
+				byte[] cardNo = new byte[8];
+				String cardNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 0, cardNo, 0, 8);
+				cardNoS = FM_Bytes.bytesToHexString(cardNo);
+				byte[] netNo = new byte[2];
+				String netNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 8, netNo, 0, 2);
+				netNoS = FM_Bytes.bytesToHexString(netNo);
+				byte[] tac = new byte[4];
+				String tacs = null;
+				System.arraycopy(Etc_GetCardInfo, 10, tac, 0, 4);
+				tacs = FM_Bytes.bytesToHexString(tac);
+				byte[] sn = new byte[2];
+				String sns = null;
+				System.arraycopy(Etc_GetCardInfo, 14, sn, 0, 2);
+				sns = FM_Bytes.bytesToHexString(sn);
+				byte[] balance = new byte[4];
+				String balances = null;
+				System.arraycopy(Etc_GetCardInfo, 16, balance, 0, 4);
+				balances = FM_Bytes.bytesToHexString(balance);
+				byte[] TermId = new byte[6];
+				String TermIds = null;
+				System.arraycopy(Etc_GetCardInfo, 20, TermId, 0, 6);
+				TermIds = FM_Bytes.bytesToHexString(TermId);
+				return cardNoS + "|$" + netNoS + "|$" + tacs + "|$" + sns + "|$" + balances + "|$" + TermIds;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "ETC储值卡查询错误" + e.getMessage());
+			System.out.println("ETC储值卡查询错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * ETC卡储值卡圈存初始化
+	 */
+	public String Etc_ValueCardInitializeLoad(int nval) {
+		try {
+			byte[] mnval = FM_Bytes.intToBytes(nval, 4);
+			byte[] st = new byte[5 + mnval.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x06;
+			st[2] = (byte) 0x04;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) mnval.length;
+			System.arraycopy(mnval, 0, st, 5, mnval.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] Etc_GetCardInfo = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, Etc_GetCardInfo, 0, Etc_GetCardInfo.length);
+				byte[] cardNo = new byte[8];
+				System.arraycopy(Etc_GetCardInfo, 0, cardNo, 0, 8);
+				String cardNoS = FM_Bytes.bytesToHexString(cardNo);
+				byte[] netNo = new byte[2];
+				System.arraycopy(Etc_GetCardInfo, 8, netNo, 0, 2);
+				String netNoS = FM_Bytes.bytesToHexString(netNo);
+				byte[] balance = new byte[4];
+				System.arraycopy(Etc_GetCardInfo, 10, balance, 0, 4);
+				String balances = FM_Bytes.bytesToHexString(balance);
+				byte[] sn = new byte[2];
+				System.arraycopy(Etc_GetCardInfo, 14, sn, 0, 2);
+				String sns = FM_Bytes.bytesToHexString(sn);
+				byte[] random = new byte[4];
+				System.arraycopy(Etc_GetCardInfo, 16, random, 0, 4);
+				String randoms = FM_Bytes.bytesToHexString(random);
+				byte[] mac1 = new byte[4];
+				System.arraycopy(Etc_GetCardInfo, 20, mac1, 0, 4);
+				String mac1s = FM_Bytes.bytesToHexString(mac1);
+				byte[] Load_Value = new byte[4];
+				System.arraycopy(Etc_GetCardInfo, 24, Load_Value, 0, 4);
+				String Load_Value_s = FM_Bytes.bytesToHexString(Load_Value);
+				byte[] TermId = new byte[6];
+				System.arraycopy(Etc_GetCardInfo, 28, TermId, 0, 6);
+				String TermIds = FM_Bytes.bytesToHexString(TermId);
+				return cardNoS + "|$" + netNoS + "|$" + balances + "|$" + sns + "|$" + randoms + "|$" + mac1s + "|$"
+						+ Load_Value_s + "|$" + TermIds;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "ETC卡储值卡圈存初始化错误" + e.getMessage());
+			System.out.println("ETC卡储值卡圈存初始化错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * ETC 储值卡圈存
+	 */
+	public String Etc_ValueCard_Load(String strMacsever, String Timestamp, String TermTransSn) {
+		try {
+			byte[] mstt = FM_Bytes.hexStringToBytes(strMacsever + Timestamp + TermTransSn);
+			byte[] st = new byte[5 + mstt.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x06;
+			st[2] = (byte) 0x05;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) mstt.length;
+			System.arraycopy(mstt, 0, st, 5, mstt.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] Etc_GetCardInfo = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, Etc_GetCardInfo, 0, Etc_GetCardInfo.length);
+				byte[] cardNo = new byte[8];
+				String cardNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 0, cardNo, 0, 8);
+				cardNoS = FM_Bytes.bytesToHexString(cardNo);
+				byte[] netNo = new byte[2];
+				String netNoS = null;
+				System.arraycopy(Etc_GetCardInfo, 8, netNo, 0, 2);
+				netNoS = FM_Bytes.bytesToHexString(netNo);
+				byte[] Trans_Tac = new byte[4];
+				String Trans_Tacs = null;
+				System.arraycopy(Etc_GetCardInfo, 10, Trans_Tac, 0, 4);
+				Trans_Tacs = FM_Bytes.bytesToHexString(Trans_Tac);
+				byte[] balance = new byte[4];
+				String balances = null;
+				System.arraycopy(Etc_GetCardInfo, 14, balance, 0, 4);
+				balances = FM_Bytes.bytesToHexString(balance);
+				byte[] sn = new byte[2];
+				String sns = null;
+				System.arraycopy(Etc_GetCardInfo, 18, sn, 0, 2);
+				sns = FM_Bytes.bytesToHexString(sn);
+				byte[] Load_Value = new byte[4];
+				String Load_Value_s = null;
+				System.arraycopy(Etc_GetCardInfo, 20, Load_Value, 0, 4);
+				Load_Value_s = FM_Bytes.bytesToHexString(Load_Value);
+				byte[] TermId = new byte[6];
+				String TermIds = null;
+				System.arraycopy(Etc_GetCardInfo, 24, TermId, 0, 6);
+				TermIds = FM_Bytes.bytesToHexString(TermId);
+				byte[] Time_Stamp = new byte[7];
+				String Time_Stamps = null;
+				System.arraycopy(Etc_GetCardInfo, 30, Time_Stamp, 0, 7);
+				Time_Stamps = FM_Bytes.bytesToHexString(Time_Stamp);
+				byte[] Term_Trans_Sn = new byte[Etc_GetCardInfo.length - 37];
+				String Term_Trans_Sns = null;
+				System.arraycopy(Etc_GetCardInfo, 37, Term_Trans_Sn, 0, Etc_GetCardInfo.length - 37);
+				Term_Trans_Sns = FM_Bytes.bytesToHexString(Term_Trans_Sn);
+				return cardNoS + "|$" + netNoS + "|$" + Trans_Tacs + "|$" + balances + "|$" + sns + "|$" + Load_Value_s
+						+ "|$" + TermIds + "|$" + Time_Stamps + "|$" + Term_Trans_Sns;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "ETC 储值卡圈存错误" + e.getMessage());
+			System.out.println("ETC 储值卡圈存错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	// ==========购电部分接口============================
+	/**
+	 * 获得电卡类型
+	 * 
+	 * @return
+	 */
+	public String SG_GetCardType() {
+		try {
+			sn_result = null;
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x00,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] id = new byte[3];
+				byte[] sn = new byte[8];
+				System.arraycopy(arr, arr.length - 3 - 2, id, 0, 3);
+				System.arraycopy(arr, 2, sn, 0, 8);
+				byte[] by = sn;
+				sn_result = FM_Bytes.bytesToHexString(sn);
+				return Utils.changeToDecimal(FM_Bytes.bytesToHexString(id));
+				// return FM_Bytes.bytesToHexString(id);
+			} else if (arr.length < 3) {
+				return "" + Utils.IntToHex(Utils.byteArrayToInt(arr));
+			} else {
+				Lw.WriteLog(context, "获错误码" + arr[1] + "");
+				System.out.println("获错误码" + arr[1] + "");
+				byte[] sg = new byte[arr.length - 2];
+				System.arraycopy(arr, 0, sg, 0, sg.length);
+				return FM_Bytes.bytesToHexString(sg);// 错误码
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获取获取购电信息错误" + e.getMessage());
+			System.out.println("获取获取购电信息错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 返回电卡序列号
+	 */
+	public String SG_GetCardSN() {
+		return sn_result;
+	}
+
+	/**
+	 * 获取用户ID
+	 */
+	public String SG_GetUserId() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x01,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] id = new byte[5];
+				System.arraycopy(arr, 2, id, 0, 5);
+				return FM_Bytes.bytesToHexString(id);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获取用户ID错误" + e.getMessage());
+			System.out.println("获取用户ID错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得电卡随机数
+	 */
+	public String SG_GetRandom() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x05,
+					(byte) 0x00, (byte) 0x04 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] bRandom = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, bRandom, 0, bRandom.length);
+				return FM_Bytes.bytesToHexString(bRandom);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得电卡随机数错误" + e.getMessage());
+			System.out.println("获得电卡随机数错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得购电区数据
+	 */
+	public String SG_GetCardGD() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x02,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] SG_GetCardGD = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, SG_GetCardGD, 0, SG_GetCardGD.length);
+				return FM_Bytes.bytesToHexString(SG_GetCardGD);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得购电区数据错误" + e.getMessage());
+			System.out.println("获得购电区数据错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获取反写区数据
+	 */
+	public String SG_GetCardFX() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x03,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] SG_GetCardFX = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, SG_GetCardFX, 0, SG_GetCardFX.length);
+
+				return FM_Bytes.bytesToHexString(SG_GetCardFX);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获取反写区数据错误" + e.getMessage());
+			System.out.println("获取反写区数据错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 电卡权限外部认证
+	 * 
+	 */
+	public int SG_DoAuthOut(int nkey, String bstrAuth) {
+		try {
+			byte[] mbstrAuth = FM_Bytes.hexStringToBytes(bstrAuth);
+			byte[] st = new byte[6 + mbstrAuth.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x05;
+			st[2] = (byte) 0x06;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) 0x09;
+			st[5] = (byte) nkey;
+			System.arraycopy(mbstrAuth, 0, st, 6, mbstrAuth.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "电卡权限外部认证错误" + e.getMessage());
+			System.out.println("电卡权限外部认证错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 电卡内部身份认证加密数
+	 */
+	public String SG_DoAuthIn() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x04,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] random = new byte[8];
+				System.arraycopy(arr, 2, random, 0, 8);
+				byte[] encription = new byte[8];
+				System.arraycopy(arr, 2 + random.length, encription, 0, 8);
+				cardRandom = FM_Bytes.bytesToHexString(random);
+				return FM_Bytes.bytesToHexString(encription);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "电卡内部身份认证加密数错误" + e.getMessage());
+			System.out.println("电卡内部身份认证加密数错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 更新卡二进制文件
+	 */
+	public int SG_UpdateBinary(int tries, String data) {
+		try {
+			byte[] mdata = FM_Bytes.hexStringToBytes(data);
+			byte[] st = new byte[5 + mdata.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x05;
+			st[2] = (byte) 0x07;
+			st[3] = (byte) tries;
+			st[4] = (byte) mdata.length;
+			System.arraycopy(mdata, 0, st, 5, mdata.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "更新卡二进制文件错误" + e.getMessage());
+			System.out.println("更新卡二进制文件错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 清空反写区
+	 */
+	public int SG_ClearFX(String mac) {
+		try {
+			byte[] mmac = FM_Bytes.hexStringToBytes(mac);
+			byte[] st = new byte[5 + mmac.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x05;
+			st[2] = (byte) 0x08;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) mmac.length;
+			System.arraycopy(mmac, 0, st, 5, mmac.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "清空反写区错误" + e.getMessage());
+			System.out.println("清空反写区错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得G01电卡客户编号
+	 */
+	public String SG_GetG01ClientNo() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x0A,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] G01ClientNo = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, G01ClientNo, 0, G01ClientNo.length);
+				return FM_Bytes.bytesToHexString(G01ClientNo);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得G01电卡客户编号错误" + e.getMessage());
+			System.out.println("获得G01电卡客户编号错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得G01电卡标识数据
+	 */
+	public String SG_GetG01CardMark() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x0b,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] G01CardMark = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, G01CardMark, 0, G01CardMark.length);
+				return FM_Bytes.bytesToHexString(G01CardMark);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得G01电卡标识数据错误" + e.getMessage());
+			System.out.println("获得G01电卡标识数据错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 读取G01电卡EF文件
+	 */
+	public String SG_ReadG01EF(int index) {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x0c,
+					(byte) 0x00, (byte) 0x01, (byte) index });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] SG_ReadG01EF = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, SG_ReadG01EF, 0, SG_ReadG01EF.length);
+				return FM_Bytes.bytesToHexString(SG_ReadG01EF);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "读取G01电卡EF文件错误" + e.getMessage());
+			System.out.println("读取G01电卡EF文件错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 写G01电卡EF文件
+	 */
+	public int SG_WriteG01EF(int index, String EfContex) {
+		try {
+			byte[] mEfContex = FM_Bytes.hexStringToBytes(EfContex);
+			byte[] st = new byte[6 + mEfContex.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x05;
+			st[2] = (byte) 0x0d;
+			st[3] = (byte) 0x00;
+			st[4] = (byte) (1 + mEfContex.length);
+			st[5] = (byte) index;
+			System.arraycopy(mEfContex, 0, st, 6, mEfContex.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "写G01电卡EF文件错误" + e.getMessage());
+			System.out.println("写G01电卡EF文件错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * G01电卡外部认证
+	 */
+	public int SG_G01ExternAuth(int key, String data) {
+		try {
+			byte[] mdata = FM_Bytes.hexStringToBytes(data);
+			byte[] st = new byte[5 + mdata.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x05;
+			st[2] = (byte) 0x0e;
+			st[3] = (byte) key;
+			st[4] = (byte) mdata.length;
+			System.arraycopy(mdata, 0, st, 5, mdata.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "G01电卡外部认证错误" + e.getMessage());
+			System.out.println("G01电卡外部认证错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得电卡内部认证随机数
+	 */
+	public String SG_GetAuthInRandom() {
+		return cardRandom;
+	}
+
+	/**
+	 * 获得电卡外部认证随机数
+	 */
+	public String SG_GetAuthOutRandom() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x05,
+					(byte) 0x00, (byte) 0x08 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] AuthOutRandom = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, AuthOutRandom, 0, AuthOutRandom.length);
+				return FM_Bytes.bytesToHexString(AuthOutRandom);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得电卡外部认证随机数错误" + e.getMessage());
+			System.out.println("获得电卡外部认证随机数错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得终端ID号
+	 */
+	public String SG_GetTerminalID() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x05, (byte) 0x09,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] GetTerminalID = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, GetTerminalID, 0, GetTerminalID.length);
+				return FM_Bytes.bytesToHexString(GetTerminalID);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得终端ID号错误" + e.getMessage());
+			System.out.println("获得终端ID号错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * ====================================================金融IC卡
+	 */
+
+	/**
+	 * 获取IC卡卡号
+	 * @return
+	 */
+	public void getIcCardNum() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x07,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+
+			String accNo = null;// 卡号
+			if (arr == null) {
+				setEvent(Error, ErrorCode.Device_Card_NULL);
+			} else if (arr[0] == (byte) 0x91) {
+				byte[] bytAcc = new byte[(int) arr[2]];// 获取长度
+				System.arraycopy(arr, 3, bytAcc, 0, bytAcc.length);
+				accNo = new String(bytAcc);
+				setEvent(ICCARDNUM, accNo);
+			} else if (Arrays.equals(arr, Utils.IntToHex(ErrorCode.SYSTEM_BUSY))) {
+				setEvent(Error, ErrorCode.SYSTEM_BUSY);
+			} else if (arr[0] == (byte) 0x77 && arr[1] == (byte) 0x08) {
+				setEvent(0xC, ErrorCode.SWIPE_CARD_FAIL);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			setEvent(Error, ErrorCode.UNKNOW_ERROR);
+		}
+	}
+
+	/**
+	 * 获得金融IC卡55数据域
+	 */
+	public int getIcCard55Data(String Amount, String Transdate, String TransTime, byte keyIndex, String[] data) {
+		try {
+			if (Amount == null || Transdate == null || TransTime == null || data == null)
+				return ErrorCode.INPUT_PARAMS;
+			byte[] bAmount;
+			if (Amount.length() % 2 == 0)
+				bAmount = FM_Bytes.hexStringToBytes(Amount);
+			else
+				bAmount = FM_Bytes.hexStringToBytes("0" + Amount);
+			byte[] bTransdate = FM_Bytes.hexStringToBytes(Transdate);
+			byte[] bTransTime = FM_Bytes.hexStringToBytes(TransTime);
+			if (bAmount.length > 6 || bTransdate.length != 3 || bTransTime.length != 3)
+				return ErrorCode.INPUT_PARAMS;
+			byte[] b1 = new byte[6];
+			System.arraycopy(bAmount, 0, b1, b1.length - bAmount.length, bAmount.length);
+			byte[] instruct = new byte[17];
+			instruct[0] = 0x7D;
+			instruct[1] = 0x08;
+			instruct[2] = 0x00;
+			instruct[3] = keyIndex;
+			instruct[4] = 0x0c;
+			System.arraycopy(b1, 0, instruct, 5, b1.length);
+			System.arraycopy(bTransdate, 0, instruct, 11, bTransdate.length);
+			System.arraycopy(bTransTime, 0, instruct, 14, bTransTime.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(instruct), TIME_OUT_NORMAL * 3);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] getIcCard55Datas = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, getIcCard55Datas, 0, getIcCard55Datas.length);
+				data[0] = FM_Bytes.bytesToHexString(getIcCard55Datas);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得金融IC卡55数据域" + e.getMessage());
+			System.out.println("获得金融IC卡55数据域" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得金融IC卡非55数据域
+	 */
+	public int getBankIcCardNo55Data(byte[] factor, String[] data) {
+		try {
+			if (factor == null || factor.length != 8 || data == null)
+				return ErrorCode.INPUT_PARAMS;
+			byte[] bNo55Data = new byte[13];
+			bNo55Data[0] = 0x7D;
+			bNo55Data[1] = 0x08;
+			bNo55Data[2] = 0x04;
+			bNo55Data[3] = 0x00;
+			bNo55Data[4] = 0x08;
+			System.arraycopy(factor, 0, bNo55Data, 5, factor.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(bNo55Data), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] getBankIcCardNo55Datas = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, getBankIcCardNo55Datas, 0, getBankIcCardNo55Datas.length);
+				data[0] = FM_Bytes.bytesToHexString(getBankIcCardNo55Datas);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得金融IC卡非55数据域错误" + e.getMessage());
+			System.out.println("获得金融IC卡非55数据域错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 处理金融IC卡脚本
+	 */
+	public int doBankIcCardScript(String script, byte keyIndex, String[] data) {
+		try {
+			if (script == null || script.equals("") || data == null)
+				return ErrorCode.INPUT_PARAMS;
+			byte[] mscript = FM_Bytes.hexStringToBytes(script);
+			byte[] st = new byte[5 + mscript.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x08;
+			st[2] = (byte) 0x01;
+			st[3] = (byte) keyIndex;
+			st[4] = (byte) mscript.length;
+			System.arraycopy(mscript, 0, st, 5, mscript.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				// data[0] = FM_Bytes.bytesToHexString(arr);
+				byte[] doBankIcCardScripts = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, doBankIcCardScripts, 0, doBankIcCardScripts.length);
+				data[0] = FM_Bytes.bytesToHexString(doBankIcCardScripts);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "清除金融IC冲正信息错误" + e.getMessage());
+			System.out.println("获清除金融IC冲正信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得最大圈存限额
+	 */
+	public int getBankIcCardAmount(byte[] data) {
+		try {
+			if (data == null || data.length != 6)
+				return ErrorCode.INPUT_PARAMS;
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x02,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				System.arraycopy(arr, 2, data, 0, data.length);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得最大圈存限额错误" + e.getMessage());
+			System.out.println("获得最大圈存限额错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获得电子现金余额
+	 */
+	public int getBankIcCardBalance(byte[] data) {
+		try {
+			if (data == null || data.length != 6)
+				return ErrorCode.INPUT_PARAMS;
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x03,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				System.arraycopy(arr, 2, data, 0, data.length);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获得电子现金余额错误" + e.getMessage());
+			System.out.println("获得电子现金余额错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 读金融IC卡冲正信息
+	 */
+	public int getBankIcCardReversalInfo(String[] data) {
+		try {
+			if (data == null)
+				return ErrorCode.INPUT_PARAMS;
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x05,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] getBankIcCardReversalInfos = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, getBankIcCardReversalInfos, 0, getBankIcCardReversalInfos.length);
+				data[0] = FM_Bytes.bytesToHexString(getBankIcCardReversalInfos);
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "读金融IC卡冲正信息错误" + e.getMessage());
+			System.out.println("读金融IC卡冲正信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 清除金融IC冲正信息
+	 */
+	public int clearBankIcCardReversalInfo() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x05,
+					(byte) 0x01, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			Lw.WriteLog(context, "清除金融IC冲正信息错误" + e.getMessage());
+			System.out.println("获清除金融IC冲正信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 获取卡的状态 返回：50 02 （无IC卡） 返回：50 03 （有IC卡）
+	 */
+	public int SCardGetStatus() {
+		try {
+			String instruct = FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x08, (byte) 0x06,
+					(byte) 0x00, (byte) 0x00 });
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(instruct, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90 && arr[1] == (byte) 0x00) {
+				byte[] CardReaderStatus = new byte[arr.length - 4];
+				System.arraycopy(arr, 2, CardReaderStatus, 0, CardReaderStatus.length);
+				return Integer.parseInt(FM_Bytes.bytesToHexString(CardReaderStatus));
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "获取卡的状态错误" + e.getMessage());
+			System.out.println("获取卡的状态错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * IC 卡数据传输
+	 */
+	public int SCardTransmit(byte[] sendbuf, String[] recvbuf, int timeout) {
+		try {
+			if (sendbuf == null || recvbuf == null) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			byte[] st = new byte[5 + sendbuf.length];
+			st[0] = (byte) 0x7D;
+			st[1] = (byte) 0x0a;
+			st[2] = (byte) 0x01;
+			if (sendbuf.length > 256)
+				st[3] = (byte) (sendbuf.length / 256);
+			else
+				st[3] = (byte) 0x00;
+			st[4] = (byte) (sendbuf.length % 256);
+			System.arraycopy(sendbuf, 0, st, 5, sendbuf.length);
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(FM_Bytes.bytesToHexString(st), timeout);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr.length < 3) {
+				return Utils.byteArrayToInt(arr);
+			} else {
+				byte[] SCardTransmits = new byte[arr.length - 2];
+				System.arraycopy(arr, 0, SCardTransmits, 0, SCardTransmits.length);
+				recvbuf[0] = FM_Bytes.bytesToHexString(SCardTransmits);
+				return ErrorCode.SUCCESS;
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "IC 数据传输错误" + e.getMessage());
+			System.out.println("IC 数据传输错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * IC卡复位,把返回的数据直接发送出去
+	 */
+	public int SCardReset(String[] resetData) {
+		try {
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(
+					FM_Bytes.bytesToHexString(new byte[] { (byte) 0x7D, (byte) 0x0a, (byte) 0x00, (byte) 0x00,
+							(byte) 0x00 }), TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				resetData[0] = FM_Bytes.bytesToHexString(arr);
+				return ErrorCode.SUCCESS;
+			} else if (arr[0] == (byte) 0x77) {// TODO
+				resetData[0] = FM_Bytes.bytesToHexString(arr);
+				return Utils.byteArrayToInt(arr);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "IC卡复位错误" + e.getMessage());
+			System.out.println("IC卡复位错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 命令直接发送,测试专用
+	 */
+	public String OrderSend(String mStr) {
+		if (mStr == null || mStr.length() < 1)
+			return "" + ErrorCode.INPUT_PARAMS;
+		try {
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper(mStr, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr.length < 3) {
+				return "" + Utils.byteArrayToInt(arr);
+			} else {
+				byte[] reset = new byte[arr.length - 2];
+				System.arraycopy(arr, 0, reset, 0, reset.length);
+				return FM_Bytes.bytesToHexString(reset);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "命令直接发送错误" + e.getMessage());
+			System.out.println("命令直接发送错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 切换到升级模式
+	 */
+	public int ChangeUpgradeMode() {
+		try {
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("83", TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "切换到升级模式错误" + e.getMessage());
+			System.out.println("切换到升级模式错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/*
+	 * 送检用，写入3DES
+	 */
+	public int write3DESKey(String key) {
+		try {
+			if (key == null || FM_Bytes.hexStringToBytes(key).length != 16) {
+				return ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("30" + key, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				return ErrorCode.SUCCESS;
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "写入3DES密钥信息错误" + e.getMessage());
+			System.out.println("写入3DES密钥信息错误" + e.getMessage());
+			return ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 送检用 加密3DES
+	 * 
+	 * @param data
+	 * @return
+	 */
+	public String encrypt3DES(String data) {
+		try {
+			if (data == null || FM_Bytes.hexStringToBytes(data).length != 8) {
+				return "" + ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("31" + data, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				byte[] encrypt = new byte[arr.length - 5];
+				System.arraycopy(arr, 1, encrypt, 0, encrypt.length);
+				return FM_Bytes.bytesToHexString(encrypt);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "加密3DES信息错误" + e.getMessage());
+			System.out.println("加密3DES信息错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	/**
+	 * 送检用，解密3DES
+	 * 
+	 * @param data
+	 * @return
+	 */
+	public String decrypt3DES(String data) {
+		try {
+			if (data == null || FM_Bytes.hexStringToBytes(data).length != 8) {
+				return "" + ErrorCode.INPUT_PARAMS;
+			}
+			SwiperCardCancel();
+			byte[] arr = control.getCSwiper("32" + data, TIME_OUT_NORMAL);
+			if (arr == null) {
+				return "" + ErrorCode.GET_DEVICE_INFO_FAIL;
+			} else if (arr[0] == (byte) 0x90) {
+				byte[] decrypt = new byte[arr.length - 5];
+				System.arraycopy(arr, 1, decrypt, 0, decrypt.length);
+				return FM_Bytes.bytesToHexString(decrypt);
+			} else if (arr.length > 3) {// 非错误码，是指令数据
+				return "" + ErrorNum(new byte[] { arr[0], arr[1] });
+			} else {
+				return "" + Utils.byteArrayToInt(arr);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+			Lw.WriteLog(context, "解密3DES信息错误" + e.getMessage());
+			System.out.println("解密3DES信息错误" + e.getMessage());
+			return "" + ErrorCode.UNKNOW_ERROR;
+		}
+	}
+
+	private int ErrorNum(byte[] errs) {
+		int err = errs[1];
+		System.out.println("获错误码:" + err + "");
+		Lw.WriteLog(context, "获错误码:" + err + "");
+		if (err == (byte) 0x01) {
+			return ErrorCode.CRC_ERROR;// CRC错误
+		} else if (err == (byte) 0x02) {
+			return ErrorCode.COMMAND_NOT_IMPLEMENTED;// 命令未执行
+		} else if (err == (byte) 0x03) {
+			return ErrorCode.SECRET_KEY_IS;// 密钥已存在
+		} else if (err == (byte) 0x04) {
+			return ErrorCode.PARAMETER_IS_ERROR;// 参数错误
+		} else if (err == (byte) 0x05) {
+			return ErrorCode.SECRET_KEY_NO;// 密钥不存在
+		} else if (err == (byte) 0x06) {
+			return ErrorCode.ENCRYPT_FAIL;// 加密失败
+		} else if (err == (byte) 0x07) {
+			return ErrorCode.NOT_SWIPE_CARD;// 未刷卡
+		} else if (err == (byte) 0x08) {
+			return ErrorCode.SWIPE_CARD_FAIL;// 刷卡失败
+		} else if (err == (byte) 0x09) {
+			return ErrorCode.NOT_OPEN_DEVICE;// 密钥未分散(没有调用打开刷卡接口)
+		} else if (err == (byte) 0x0a) {
+			return ErrorCode.SWIPE_CARD_FAIL;// 刷卡未成功时不可以调用05命令
+		} else if (err == (byte) 0x0b) {
+			return ErrorCode.DEVICE_IS_OPEN;// 刷卡器已打开(已经调用03命令不可以再次调用，终端不会执行这条指令)
+		} else if (err == (byte) 0x0c) {
+			return ErrorCode.SYSTEM_BUSY;// 正在加密
+		} else if (err == (byte) 0x0d) {
+			return ErrorCode.SYSTEM_BUSY;// 启动加密(正在准备加密)
+		} else if (err == (byte) 0x0e) {
+			return ErrorCode.SECRET_KEY_NO;// 设备ID未写入
+		} else {
+			return Utils.byteArrayToInt(errs);
+		}
+	}
+
+	// 运行在主线程时调用
+	public void MainThreadLooper() {
+		handler = new Handler() {
+			@Override
+			public void handleMessage(Message msg) {
+				dispatchEvent(msg);
+			}
+		};
+	}
+
+	// 运行在子线程时调用，防止崩溃
+	class SubThreadLooper extends Thread {
+		public void run() {
+			Looper.prepareMainLooper();
+			handler = new Handler() {
+				@Override
+				public void handleMessage(Message msg) {
+					dispatchEvent(msg);
+				}
+			};
+			Looper.loop();
+		}
+	}
+
+	// 触发回调事件
+	private void setEvent(int what, Object obj) {
+		if (eventLock == null) {
+			return;
+		}
+		if (listener == null) {
+			return;
+		}
+		synchronized (eventLock) {
+			Message message = Message.obtain();
+			message.what = what;// 做个标记，主要为了事件分发的时候事件区分
+			message.obj = obj;
+			handler.sendMessage(message);
+		}
+	}
+
+	// 分发回调
+	private Event mEvents = new Event() {
+
+		@Override
+		public void setEvent(int what, Object obj) {
+			synchronized (eventLock) {
+				Message message = Message.obtain();
+				message.what = what;// 做个标记，主要为了事件分发的时候事件区分
+				message.obj = obj;
+				handler.sendMessage(message);
+			}
+		}
+	};
+
+	// 事件分发,OK
+	protected void dispatchEvent(Message msg) {
+		try {
+			switch (msg.what) {
+			case Plugin:
+				listener.onPlugin();
+				break;
+			case Plugout:
+				listener.onPlugout();
+				break;
+			case Error:
+				listener.onError((Integer) msg.obj);
+				break;
+			case CardNum:// 卡号
+				listener.onCardNum((String) msg.obj);
+				break;
+			case CardData:// 卡磁
+				listener.onCardData((byte[]) msg.obj);
+				break;
+			case CardInfo:
+				break;
+			case DETECTICCARD:
+				listener.onDetectICCard();
+				break;
+			case ICCARDNUM:
+				listener.onICCard((String) msg.obj);
+				break;
+			case STARTADAPTE:
+				listener.onStartAdapte();
+				break;
+			case ADAPTEFINSH:
+				listener.onAdapteFinsh((Boolean)msg.obj);
+				break;
+			default:// 错误分发
+				listener.onError((Integer) msg.obj);
+				break;
+			}
+		} catch (Exception e) {
+		}
+	}
+}

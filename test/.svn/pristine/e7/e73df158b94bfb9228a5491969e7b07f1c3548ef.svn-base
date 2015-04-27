@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">Un新音频</string>
+    <string name="log_name">日志记录</string>
+
+    <string name="log_clear_btn">清空日志</string>
+    <string name="log_export_btn">导出日志至SD卡</string>
+</resources>

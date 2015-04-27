@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <item name="log_clear_btn" type="id"/>
+    <item name="log_export_btn" type="id"/>
+    <item name="scro" type="id"/>
+    <item name="log" type="id"/>
+
+    <item name="dialog_data_load" type="id"/>
+    <item name="dialog_data_load_txt" type="id"/>
+</resources>

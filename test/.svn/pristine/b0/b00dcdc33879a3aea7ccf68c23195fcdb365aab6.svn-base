@@ -1,0 +1,61 @@
+package com.fncat.xswipe.controller;
+
+public class ErrorCode {
+	public static final int COMMAND_NOT_IMPLEMENTED = 10103;// 命令未执行
+	public static final int SECRET_KEY_IS = 10104;// 密钥已经存在
+	public static final int PARAMETER_IS_ERROR = 10105;// 参数错误 输入
+	public static final int SECRET_KEY_NO = 10106;// 密钥不存在
+	public static final int ENCRYPT_FAIL = 10107;// 加密失败
+	public static final int NOT_SWIPE_CARD = 10108;// 未刷卡、04 04 04 04
+	public static final int SWIPE_CARD_FAIL = 10109;// 刷卡失败
+	public static final int DEVICE_IS_OPEN = 10112;// 刷卡器已打开(已经调用03命令不可以再次调用，终端不会执行这条指令)
+	public static final int RECV_DATA_NOT_ENOUGH = 10115;// 接受数据长度不够
+	public static final int RECV_DATA_ERROR = 10116;// 将接受数据错误，获取为null,OK
+	public static final int ERR_DEVICE_UNKOWN = 10117; // 设备没初始化,OK
+	public static final int NOT_SWIPER_LISTENER = 10113;// 未启动刷卡监听
+	public static final int INPUT_PARAMS = 10114;// 参数长度不够,OK
+	public static final int SUCCESS = 0;// 执行成功,OK
+	public static final int UNKNOW_ERROR = 10111;// 未知错误,OK
+	public static final int SYSTEM_BUSY = 10100;// 硬件正在工作中,OK
+	public static final int GET_DEVICE_INFO_FAIL = 10101;// 获取设备信息失败,OK
+	public static final int CRC_ERROR = 10102;// CRC错误（SDK发送的数据硬件解析不匹配）,OK
+	public static final int NOT_OPEN_DEVICE = 10110;// 没有调用打开刷卡接口,OK
+	public static final int AudioManager_NULL = 20000;// 音频初始化失败，为null,OK
+	public static final int brand_NULL = 20300;// 手机型号获取为空,OK
+	public static final int brand_nothing = 20400;// 该手机型号没有适配,OK
+	public static final int powerDevice_ERROR = 20700;// 设备上电/关闭异常,OK
+	public static final int Device_encrypt_NULL = 20800;// 获取卡磁为null,OK
+	public static final int Device_encrypt_1 = 20900;// 轮询超过指定次数获取卡磁,OK
+	public static final int Device_Card_NULL = 21000;// 获取卡号为null,OK
+	public static final int Common_Interrupt = 21100;// 中断,OK
+	public static final int Common_TIMEOUT = 21200;// 超时,OK
+	// 错误码是在30*256的基础上增加的，为了保证错误码必须是2个字节
+	public static final int Hbyte = 0x1e00;
+	// 新音频的返回值
+	public static final int VOID_PACKAGE = Hbyte + 1000; // 空包，一般单片机用来告知手机发送的请求成功接受，但是没有需要的数据
+	public static final int DATA_INCOMPLETE = Hbyte + (-1); /*
+															 * 数据接受结束后，接受的数据不全而导致错误
+															 */
+	public static final int DATA_LOST = Hbyte + (-2); /*
+													 * 在解析音频数据的时候，发现有数据无法解析而导致数据丢失
+													 */
+	public static final int CAPTRUE_HEAD_FAILED = Hbyte + (-3); /*
+																 * 一直捕获不到前导
+																 * 尝试超过次数
+																 */
+	public static final int READ_WAV_TIMEOUT = Hbyte + (-4); // 录取音频的时候一直没有有效音频数据出现，超时。
+	public static final int AUDIO_RECORD_NOT_INIT = Hbyte + (-5); // record没有被初始化，联想手机上出现过权限被拦截的情况
+	public static final int PARSE_TIMEOUT = Hbyte + (-6); // 解析音频数据超时
+	public static final int AUDIO_RECORD_IS_STOP = Hbyte + (-7); // 录音停止了。
+	public static final int AUDIO_TRACK_NOT_INIT = Hbyte + (-8); // AudioTrack没有初始化
+	public static final int INPUT_ERROR = Hbyte + (-9); // 输入有错，输入的数据格式有误。
+	public static final int WRITE_EXCEPTION = Hbyte + (-10); // 写入音频数据异常
+	public static final int CANNOT_PLAY_TRACK = Hbyte + (-11); // 不能播放音频
+	public static final int CHECK_FAILED = Hbyte + (-12); // CRC一直校验错误
+	public static final int DEVICE_RECV_ERR = Hbyte + (-13); // 单片机一直要求重发数据
+	public static final int MUST_NOT_CMD_NORMAL_REQUEST = Hbyte + (-14); // 单片机不应该给手机发送CMD_NORMAL_REQUEST命令
+	public static final int INTERRPUTED = Hbyte + (-15); // 工作被中断了。
+	public static final int PROTOCAL_ERR = Hbyte + (-16); // 在保证数据接受完全正确的前提下，协议错误，任何与协议不符的错误
+	public static final int NO_INPUT = Hbyte + (-17); // 输入数据空
+	public static final int AUDIO_VOLUME_LIMITED = Hbyte + (-100);// 媒体音量被系统强制减弱，请到设置里修改媒体音量至最大值
+}

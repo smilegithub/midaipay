@@ -1,0 +1,24 @@
+package com.fncat.xswipe.controller;
+
+public interface StatusListener {
+	public void onPlugin();
+
+	public void onPlugout();
+
+	public void onError(int errCode);
+
+	public void onCardNum(String accNo);
+
+	public void onCardData(byte[] encTrack);
+
+	public void onCardInfo(String accNo, byte[] encTrack);
+
+	// ���������IC���
+	public void onDetectICCard();
+
+	// ������IC���������
+	public void onICCard(String accNo);
+	
+	public void onStartAdapte();
+	public void onAdapteFinsh(boolean isSuccess);
+}

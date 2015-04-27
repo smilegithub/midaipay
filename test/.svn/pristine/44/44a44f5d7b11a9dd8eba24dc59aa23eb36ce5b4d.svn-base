@@ -1,0 +1,176 @@
+package com.fncat.xswipe.utils;
+
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+import android.os.Handler;
+import android.os.Message;
+
+public class Utils {
+
+	/**
+	 * 功能：摘要加?参数：digest 要加密的摘要原文 encName 摘要加密算法，包?MD5"?SHA-1"?SHA-256"，默认使用MD5
+	 * 返回值：加密后的结果
+	 */
+
+	public static byte[] digestEncrypt(byte[] digest, String encName) {
+		byte[] result = null;
+		try {
+			if (encName == null || encName.equals("")) {
+				encName = "MD5";
+			}
+			MessageDigest md = MessageDigest.getInstance(encName);
+			md.update(digest);
+			result = md.digest();
+		} catch (NoSuchAlgorithmException e) {
+			System.out.println("Invalid algorithm.");
+			return null;
+		}
+		return result;
+	}
+
+	/**
+	 * 获取加密后密码的方法
+	 * 
+	 * @param password
+	 * @return
+	 */
+	public static byte[] getPwd(String password) {
+		int i;
+		byte[] arrPwd = new byte[16];
+		for (i = 0; i < arrPwd.length; i++)
+			arrPwd[i] = (byte) 0xff;
+		arrPwd[0] = (byte) password.length();
+		byte[] temp = password.getBytes();
+		int pos = 1;
+		for (i = 0; i < temp.length; i++) {
+			int ch = temp[i] - 0x30;
+			if (ch > 9)
+				ch -= 7;
+			if (i % 2 == 0) {
+				arrPwd[pos] = (byte) ((ch << 4) | (arrPwd[pos] & 0x0f));
+			} else {
+				arrPwd[pos] = (byte) ((arrPwd[pos] & 0xf0) | ch);
+				pos++;
+			}
+		}
+		return arrPwd;
+	}
+
+	public static String ASCIItoHex(String s) {
+
+		byte[] baKeyword = new byte[s.length() / 2];
+		for (int i = 0; i < baKeyword.length; i++) {
+			try {
+				baKeyword[i] = (byte) (0xff & Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16));
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+
+		try {
+			s = new String(baKeyword, "utf-8");// UTF-16le:Not
+		} catch (Exception e1) {
+			e1.printStackTrace();
+		}
+		return s;
+	}
+
+	/**
+	 * int转成16进制的byte
+	 * 
+	 * @param i
+	 * @return
+	 */
+	public static byte[] IntToHex(int i) {
+		String string = null;
+		if (i >= 0 && i < 10) {
+			string = "0" + i;
+		} else {
+			string = Integer.toHexString(i);
+		}
+		return HexStringToByteArray(string);
+	}
+
+	public static int ByteToInt(byte b) {
+		return b & 0xff;
+	}
+
+	/**
+	 * 16进制字节转换成int
+	 * 
+	 * @param b
+	 * @return
+	 */
+	public static int byteArrayToInt(byte[] b) {
+		int result = 0;
+		for (int i = 0; i < b.length; i++) {
+			result <<= 8;
+			result |= (b[i] & 0xff);
+		}
+		return result;
+	}
+
+	/**
+	 * 
+	 * @param str
+	 *            将十六进制字符串转换成十进制字符串
+	 * @return
+	 */
+	public static String changeToDecimal(String str) {
+		byte[] by = HexStringToByteArray(str);
+		char[] chr = null;
+		String un_utf8;
+
+		try {
+			un_utf8 = new String(by, "utf-8");
+			chr = un_utf8.toCharArray();
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return new String(chr);
+	}
+
+	static final String HEXES = "0123456789ABCDEF";
+
+	public static String byteArray2Hex(byte[] raw) {
+		if (raw == null) {
+			return null;
+		}
+		final StringBuilder hex = new StringBuilder(2 * raw.length);
+		for (final byte b : raw) {
+			hex.append(HEXES.charAt((b & 0xF0) >> 4)).append(HEXES.charAt((b & 0x0F)));
+		}
+		return hex.toString();
+	}
+
+	public static byte[] HexStringToByteArray(String hexString) {
+		if (hexString == null || hexString.equals("")) {
+			return null;
+		}
+		if (hexString.length() == 1 || hexString.length() % 2 != 0) {
+			hexString = "0" + hexString;
+		}
+		hexString = hexString.toUpperCase();
+		int length = hexString.length() / 2;
+		char[] hexChars = hexString.toCharArray();
+		byte[] d = new byte[length];
+		for (int i = 0; i < length; i++) {
+			int pos = i * 2;
+			d[i] = (byte) (charToByte(hexChars[pos]) << 4 | charToByte(hexChars[pos + 1]));
+		}
+		return d;
+	}
+
+	private static byte charToByte(char c) {
+		return (byte) "0123456789ABCDEF".indexOf(c);
+	}
+
+	public static void HandData(Handler mHandler, Object mStr, int num) {
+		Message messaged = mHandler.obtainMessage();
+		messaged.obj = mStr;
+		messaged.what = num;
+		mHandler.sendMessage(messaged);
+	}
+}

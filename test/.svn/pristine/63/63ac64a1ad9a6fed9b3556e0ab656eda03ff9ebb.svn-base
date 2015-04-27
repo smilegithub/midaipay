@@ -1,0 +1,21 @@
+package com.fncat.xswipe.controller;
+
+public interface StatusListener {
+	public void onPlugin();
+
+	public void onPlugout();
+
+	public void onError(int errCode);
+
+	public void onCardNum(String accNo);
+
+	public void onCardData(byte[] encTrack);
+
+	public void onCardInfo(String accNo, byte[] encTrack);
+
+	// 检测到IC卡
+	public void onDetectICCard();
+
+	// 获得IC卡卡号
+	public void onICCard(String accNo);
+}
