@@ -11,7 +11,7 @@
 					<key>kind</key>
 					<string>software-package</string>
 					<key>url</key>
-					<string>http://www.midaipay.com/setup/Midaibao.ipa</string>
+					<string>http://idc94.midaipay.com:11000/portal/app_down/Midaibao.ipa</string>
 				</dict>
 				<dict>
 					<key>kind</key>
